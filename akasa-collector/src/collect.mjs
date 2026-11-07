@@ -11,6 +11,7 @@ import { chromeExecutable } from './browser-path.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const HOME = 'https://www.akasaair.com/flight-booking';
 const SEARCH_PATH = '/api/ibe/availability/search';
+const MARKETS_PATH = '/api/nsk/v2/resources/markets';
 const DENIAL = new Set(['CAPTCHA', 'ACCESS_DENIED', 'RATE_LIMITED', 'SESSION_EXPIRED']);
 const RETRYABLE = new Set(['TIMEOUT', 'SITE_NETWORK_FAILURE', 'MARKETS_UNAVAILABLE',
   'FORM_UNCONFIRMED', 'RESULTS_UNVERIFIED', 'AIRPORT_PICKER_UNAVAILABLE']);
@@ -85,19 +86,21 @@ async function savePage(page, directory, label) {
     screenshotSha256: screenshot ? hash(screenshot) : null };
 }
 
-function classify(error, network, pageText = '') {
+export function classify(error, network, pageText = '') {
   if (/captcha|verify you are human|security challenge/i.test(pageText))
     return { code: 'CAPTCHA', detail: 'Akasa showed a challenge' };
   if (/access denied|request blocked|forbidden/i.test(pageText))
     return { code: 'ACCESS_DENIED', detail: 'Akasa showed an access block' };
   const booking = network.filter(item => item.host === 'prod-bl.qp.akasaair.com' &&
     /^\/api\/(ibe|nsk)\//.test(item.path));
-  if (booking.some(item => item.status === 429))
-    return { code: 'RATE_LIMITED', detail: 'Akasa returned HTTP 429' };
-  if (booking.some(item => item.status === 403))
-    return { code: 'ACCESS_DENIED', detail: 'Akasa returned HTTP 403' };
-  if (booking.some(item => item.status === 401))
-    return { code: 'SESSION_EXPIRED', detail: 'Akasa returned HTTP 401' };
+  const deniedResponse = status => booking.find(item => item.status === status);
+  const detail = response => `Akasa returned HTTP ${response.status} from ${response.path}`;
+  const rateLimited = deniedResponse(429);
+  if (rateLimited) return { code: 'RATE_LIMITED', detail: detail(rateLimited) };
+  const accessDenied = deniedResponse(403);
+  if (accessDenied) return { code: 'ACCESS_DENIED', detail: detail(accessDenied) };
+  const unauthorized = deniedResponse(401);
+  if (unauthorized) return { code: 'SESSION_EXPIRED', detail: detail(unauthorized) };
   if (error.code) return { code: error.code, detail: error.message };
   if (/ERR_CERT_|CERTIFICATE_VERIFY_FAILED|certificate authority/i.test(error.message))
     return { code: 'TLS_TRUST_FAILURE', detail: error.message };
@@ -149,6 +152,21 @@ export function matchesDateInput(value, isoDate) {
   return Number(match[1]) === date.getUTCDate() &&
     match[2].slice(0, 3).toLowerCase() === month.slice(0, 3).toLowerCase() &&
     Number(match[3]) === date.getUTCFullYear();
+}
+
+export function marketsResponseFailure(response) {
+  const status = response.status();
+  const detail = `Akasa returned HTTP ${status} from ${MARKETS_PATH}`;
+  if (status === 401) return { code: 'SESSION_EXPIRED', detail };
+  if (status === 403) return { code: 'ACCESS_DENIED', detail };
+  if (status === 429) return { code: 'RATE_LIMITED', detail };
+  if (status !== 200) return { code: 'MARKETS_UNAVAILABLE', detail };
+  return null;
+}
+
+export async function waitForMarketsResponse(page, timeoutMs = 30000) {
+  return page.waitForResponse(response => response.url().includes(MARKETS_PATH),
+    { timeout: timeoutMs }).catch(() => null);
 }
 
 async function selectDate(page, isoDate, delayMs) {
@@ -228,15 +246,16 @@ async function collectAttempt(context, query, directory, options, log, attempt) 
       failed: request.failure()?.errorText || 'unknown' });
   });
   try {
-    const markets = page.waitForResponse(response =>
-      response.url().includes('/api/nsk/v2/resources/markets') && response.status() === 200,
-    { timeout: 30000 }).catch(() => null);
+    const markets = waitForMarketsResponse(page);
     const home = await page.goto(HOME, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await stageLog('homepage_loaded');
     if (home?.status() === 403) throw Object.assign(new Error('Akasa homepage returned 403'),
       { code: 'ACCESS_DENIED' });
-    if (!await markets) throw Object.assign(new Error('Akasa markets did not load'),
+    const marketsResponse = await markets;
+    if (!marketsResponse) throw Object.assign(new Error(`No response arrived from ${MARKETS_PATH}`),
       { code: 'MARKETS_UNAVAILABLE' });
+    const marketsFailure = marketsResponseFailure(marketsResponse);
+    if (marketsFailure) throw Object.assign(new Error(marketsFailure.detail), marketsFailure);
     await page.locator('input[name="From"]').waitFor({ state: 'visible', timeout: 15000 });
     await stageLog('markets_ready');
     await savePage(page, directory, `home-attempt-${attempt}`);

@@ -33,11 +33,14 @@ export async function verifySearch(directory) {
         !(Date.parse(metadata.at) >= Date.parse(result.submittedAt)) ||
         !(Date.parse(result.collectedAt) >= Date.parse(metadata.at)))
       errors.push('Fare response is not attributable to a fresh, submitted official AIX search');
-    const parsed = parseSearchResponse(await read('airlineResponse'), result.query);
+    const page = await read('resultPage');
+    const cards = extractCardsFromHtml(page);
+    const parsed = parseSearchResponse(await read('airlineResponse'), result.query, { cards });
     if (!parsed || parsed.fares.length !== result.fares.length)
       errors.push('Saved fares differ in count from the airline response');
-    const page = await read('resultPage');
-    if (parsed?.fares.length) matchFaresToCards(parsed.fares, extractCardsFromHtml(page), result.query);
+    if (new Set(result.fares.map(fare => fare.journeyKey)).size !== result.fares.length)
+      errors.push('Saved fares contain duplicate journey identities');
+    if (parsed?.fares.length) matchFaresToCards(parsed.fares, cards, result.query);
     for (const [index, fare] of result.fares.entries()) {
       const original = parsed?.fares.find(item => item.journeyKey === fare.journeyKey);
       if (!original || Object.keys(original).some(key => JSON.stringify(original[key]) !== JSON.stringify(fare[key])))
@@ -46,8 +49,13 @@ export async function verifySearch(directory) {
       const rowRef = result.evidence[`row${index + 1}`];
       if (!rowRef || fare.evidence?.rowHtml !== rowRef.file)
         errors.push(`No matching row evidence for ${fare.flight}`);
-      else if (!page.includes(await fs.readFile(path.join(directory, rowRef.file), 'utf8')))
-        errors.push(`Row evidence is absent from the saved page for ${fare.flight}`);
+      else {
+        const row = await fs.readFile(path.join(directory, rowRef.file), 'utf8');
+        const matchingCard = cards.find(card => card.journeyKey === fare.journeyKey &&
+          card.origin === result.query.origin && card.destination === result.query.destination);
+        if (!matchingCard || row !== matchingCard.html)
+          errors.push(`Row evidence does not match the saved journey for ${fare.flight}`);
+      }
     }
   } catch (error) { errors.push(error.message || 'Airline/page evidence could not be verified'); }
   return { ok: errors.length === 0, errors };

@@ -119,6 +119,11 @@ function renderRun(run) {
     !DENIALS.has(task.cause?.code) && task.travelDate > dateFor(0));
   $('#retry-all').hidden = active || DENIALS.has(run.stopReason) || !retryable.length;
   $('#retry-all').textContent = `Retry ${retryable.length} failed search${retryable.length === 1 ? '' : 'es'}`;
+  const recordedDenial = DENIALS.has(run.stopReason) || run.tasks.some(task => DENIALS.has(task.cause?.code));
+  const recoverable = run.tasks.filter(task => ['failed', 'partial', 'skipped', 'interrupted', 'blocked'].includes(task.status) &&
+    task.travelDate > dateFor(0));
+  $('#recover-run').hidden = active || !recordedDenial || !recoverable.length;
+  $('#recover-run').textContent = `Resume ${recoverable.length} unfinished search${recoverable.length === 1 ? '' : 'es'}`;
   $('#run-status').textContent = statusLabel(run.status);
   const finished = run.tasks.filter(task => !['queued', 'running'].includes(task.status)).length;
   $('#run-count').textContent = `${finished} / ${run.tasks.length}`;
@@ -126,6 +131,7 @@ function renderRun(run) {
   $('#run-started').textContent = niceTime(run.startedAt);
   $('#retry-origin').hidden = !run.retryOf;
   $('#retry-origin').textContent = run.retryOf ?
+    run.retryOf.recovery ? `Recovery of saved run ${run.retryOf.runId}, ${run.retryOf.taskIds.length} future searches. The original run and evidence are preserved.` :
     run.retryOf.taskIds ? `Batch retry of saved run ${run.retryOf.runId}, ${run.retryOf.taskIds.length} searches. The original evidence is preserved.` :
       `Single-search retry of saved run ${run.retryOf.runId}, search ${run.retryOf.taskId}. The original evidence is preserved.` : '';
   $('#run-resource').hidden = !run.resourceNote;
@@ -207,6 +213,23 @@ $('#retry-all').addEventListener('click', async () => {
   try {
     const { run } = await api(`/api/runs/${encodeURIComponent(currentRun.id)}/retry-failed`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    });
+    await refreshRecent(run.id); renderRun(run); connect(run.id);
+  } catch (error) { $('#run-action-error').textContent = error.message; }
+  finally { retryPending = false; button.disabled = false; }
+});
+$('#recover-run').addEventListener('click', async () => {
+  if (!currentRun || retryPending) return;
+  const count = currentRun.tasks.filter(task => ['failed', 'partial', 'skipped', 'interrupted', 'blocked'].includes(task.status) &&
+    task.travelDate > dateFor(0)).length;
+  const warning = `This saved run stopped after Akasa denied access. Resume its ${count} unfinished future searches only if access has since been restored. The original run and evidence will remain saved. If Akasa denies access again, the queue will stop. Continue?`;
+  if (!window.confirm(warning)) return;
+  retryPending = true;
+  const button = $('#recover-run'); button.disabled = true;
+  $('#run-action-error').textContent = '';
+  try {
+    const { run } = await api(`/api/runs/${encodeURIComponent(currentRun.id)}/recover-denied`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accessRestored: true })
     });
     await refreshRecent(run.id); renderRun(run); connect(run.id);
   } catch (error) { $('#run-action-error').textContent = error.message; }

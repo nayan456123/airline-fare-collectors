@@ -7,7 +7,7 @@ import { JobManager, OFFSETS, findAudioPython } from './web-jobs.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const webRoot = path.join(packageRoot, 'web');
-const runRoot = path.join(packageRoot, 'web-runs');
+const runRoot = path.resolve(process.env.AIRINDIA_RUN_ROOT || path.join(packageRoot, 'web-runs'));
 const port = Number(process.env.AIRINDIA_PORT || 8789);
 const manager = new JobManager({ root: runRoot, packageRoot });
 manager.on('error', error => console.error('Web job error:', error));
@@ -118,7 +118,8 @@ async function route(req, res) {
   if (req.method === 'GET') {
     const assets = { '/': ['index.html', 'text/html; charset=utf-8'],
       '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
-      '/app.js': ['app.js', 'text/javascript; charset=utf-8'] };
+      '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
+      '/retry-eligibility.js': ['retry-eligibility.js', 'text/javascript; charset=utf-8'] };
     const asset = assets[url.pathname];
     if (asset) return file(res, path.join(webRoot, asset[0]), asset[1]);
   }

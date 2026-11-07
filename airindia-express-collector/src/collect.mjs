@@ -11,15 +11,20 @@ import { chromeExecutable } from './browser-path.mjs';
 import { parseSearchResponse, extractCardsFromHtml, matchFaresToCards } from './parse.mjs';
 import { verifySearch } from './verify.mjs';
 import { installHttpTransport } from './http-transport.mjs';
+import { resolveUserAgentProfile } from './user-agent-profile.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const HOME = 'https://www.airindiaexpress.com/en/book-flights/';
-const DENIALS = new Set(['CAPTCHA', 'ACCESS_DENIED', 'RATE_LIMITED', 'SESSION_EXPIRED']);
+const DENIALS = new Set(['CAPTCHA', 'ACCESS_DENIED', 'RATE_LIMITED', 'SESSION_EXPIRED', 'VERIFICATION_SERVICE_UNAVAILABLE']);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const stamp = () => new Date().toISOString();
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const coded = (code, detail) => Object.assign(new Error(detail), { code });
 const runFile = promisify(execFile);
+
+export function retryDelayMs(lastLaunch, now, minIntervalMs, backoffMs) {
+  return Math.max(backoffMs, minIntervalMs - (now - lastLaunch), 0);
+}
 
 export async function withDeadline(operation, milliseconds, label) {
   let timer;
@@ -33,18 +38,24 @@ export async function withDeadline(operation, milliseconds, label) {
 const pageText = page => withDeadline(page.locator('body').innerText({ timeout: 2500 }),
   3000, 'Read page state').catch(() => '');
 
-async function launchBrowser(profile, options) {
+export async function launchBrowser(profile, options) {
+  const browserExecutable = () => chromeExecutable({ chromiumExecutable: chromium.executablePath() });
+  const userAgentProfile = options.userAgentProfile === 'chrome-compatible' ?
+    await resolveUserAgentProfile(browserExecutable()) : null;
+  const externalChrome = options.browser === 'chrome' && !options.proxy &&
+    (options.mode === 'headed' || options.browserLauncher === 'cdp');
   // Reuse the ordinary Chrome + local CDP transport already used by the
   // Air India collector. Browser sessions stay dedicated to this source.
-  if (options.mode !== 'headed' || options.browser !== 'chrome' || options.proxy) {
+  if (!externalChrome) {
     const engine = options.browser === 'firefox' ? firefox : chromium;
     const context = await engine.launchPersistentContext(profile, {
-      ...(options.browser === 'chrome' ? { executablePath: chromeExecutable() } : {}),
+      ...(userAgentProfile ? { userAgent: userAgentProfile.userAgent } : {}),
+      ...(options.browser === 'chrome' ? { executablePath: browserExecutable() } : {}),
       headless: options.mode === 'headless', viewport: { width: 1440, height: 900 },
       ...(options.proxy ? { proxy: options.proxy } : {}),
       ...(options.disableHttp2 ? { args: ['--disable-http2'] } : {})
     });
-    return { context, close: () => context.close() };
+    return { context, userAgentProfile, close: () => context.close() };
   }
   const port = await new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -54,30 +65,59 @@ async function launchBrowser(profile, options) {
       server.close(() => resolve(value));
     });
   });
-  const chrome = spawn(chromeExecutable(), [
+  const chrome = spawn(browserExecutable(), [
     `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`,
     '--remote-debugging-address=127.0.0.1', '--no-first-run', '--no-default-browser-check',
-    '--window-size=1440,900', ...(options.disableHttp2 ? ['--disable-http2'] : []), 'about:blank'
+    '--window-size=1440,900', ...(options.mode === 'headless' ? ['--headless'] : []),
+    ...(userAgentProfile ? [`--user-agent=${userAgentProfile.userAgent}`] : []), ...(options.disableHttp2 ? ['--disable-http2'] : []), 'about:blank'
   ], { stdio: 'ignore' });
   let launchError;
   chrome.on('error', error => { launchError = error; });
-  const stopChrome = () => { if (chrome.exitCode === null) chrome.kill('SIGTERM'); };
+  const running = () => chrome.exitCode === null && chrome.signalCode === null;
+  const exitCleanup = () => { if (running()) chrome.kill('SIGTERM'); };
+  const stopChrome = async () => {
+    if (!running()) return;
+    await new Promise(resolve => {
+      let timer;
+      const exited = () => { clearTimeout(timer); resolve(); };
+      chrome.once('exit', exited);
+      chrome.kill('SIGTERM');
+      timer = setTimeout(() => {
+        if (running()) chrome.kill('SIGKILL');
+        chrome.off('exit', exited); resolve();
+      }, 3000);
+    });
+  };
+  const sigterm = async () => { await stopChrome(); process.exit(143); };
+  const sigint = async () => { await stopChrome(); process.exit(130); };
+  process.once('exit', exitCleanup);
+  process.once('SIGTERM', sigterm);
+  process.once('SIGINT', sigint);
+  const detachCleanup = () => {
+    process.off('exit', exitCleanup); process.off('SIGTERM', sigterm); process.off('SIGINT', sigint);
+  };
   try {
     const deadline = Date.now() + 20000;
     let browser;
     while (Date.now() < deadline) {
       if (launchError) throw launchError;
-      if (chrome.exitCode !== null) throw new Error(`Chrome exited with code ${chrome.exitCode}`);
+      if (!running()) throw new Error(`Chrome exited with code ${chrome.exitCode}, signal ${chrome.signalCode}`);
       try { browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 1000 }); break; }
       catch { await sleep(250); }
     }
     const context = browser?.contexts()[0];
     if (!context) throw new Error('Ordinary Chrome did not provide its dedicated persistent context.');
-    return { context, close: async () => {
+    let processEvidence = { pid: chrome.pid, evidenceSource: null, observedHeadlessArgument: null };
+    if (process.platform === 'linux') {
+      const commandLine = await fs.readFile(`/proc/${chrome.pid}/cmdline`, 'utf8').catch(() => null);
+      if (commandLine) processEvidence = { pid: chrome.pid, evidenceSource: 'linux-proc-cmdline',
+        observedHeadlessArgument: commandLine.split(/[\0\s]+/).find(argument => /^--headless(?:=|$)/.test(argument)) || null };
+    }
+    return { context, userAgentProfile, processEvidence, close: async () => {
       try { await withDeadline(browser.close(), 5000, 'Close ordinary Chrome'); }
-      finally { stopChrome(); }
+      finally { await stopChrome(); detachCleanup(); }
     } };
-  } catch (error) { stopChrome(); throw error; }
+  } catch (error) { await stopChrome(); detachCleanup(); throw error; }
 }
 
 export function proxyConfig(server, env = process.env) {
@@ -93,9 +133,9 @@ export function proxyConfig(server, env = process.env) {
 }
 
 export function parseArgs(args) {
-  const options = { searches: [], mode: 'headed', browser: 'chrome', disableHttp2: false,
+  const options = { searches: [], mode: 'headless', browser: 'chrome', disableHttp2: false,
     output: path.join(root, 'runs'), profile: null, interactionDelayMs: 1800,
-    minIntervalMs: 20000, retries: 1, httpTransport: 'http1', proxy: proxyConfig(process.env.AIX_PROXY_SERVER) };
+    minIntervalMs: 20000, retries: 1, httpTransport: 'native', userAgentProfile: null, browserLauncher: null, proxy: proxyConfig(process.env.AIX_PROXY_SERVER) };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--headed') { options.mode = 'headed'; continue; }
@@ -121,6 +161,8 @@ export function parseArgs(args) {
     else if (arg === '--interaction-delay-ms') options.interactionDelayMs = Number(value);
     else if (arg === '--min-interval-ms') options.minIntervalMs = Number(value);
     else if (arg === '--retries') options.retries = Number(value);
+    else if (arg === '--browser-launcher') options.browserLauncher = value;
+    else if (arg === '--user-agent-profile') options.userAgentProfile = value;
     else if (arg === '--http-transport') options.httpTransport = value;
     else throw new Error(`Unknown option ${arg}`);
   }
@@ -135,6 +177,17 @@ export function parseArgs(args) {
     throw new Error('--retries must be 0 or 1.');
   if (!['http1', 'native'].includes(options.httpTransport))
     throw new Error('--http-transport must be http1 or native.');
+  const nativeHeadlessChrome = options.mode === 'headless' && options.browser === 'chrome' && !options.proxy;
+  options.browserLauncher ??= nativeHeadlessChrome ? 'cdp' : 'playwright';
+  options.userAgentProfile ??= nativeHeadlessChrome ? 'chrome-compatible' : 'native';
+  if (!['native', 'chrome-compatible'].includes(options.userAgentProfile))
+    throw new Error('--user-agent-profile must be native or chrome-compatible.');
+  if (options.userAgentProfile === 'chrome-compatible' && (options.browser !== 'chrome' || options.mode !== 'headless' || options.proxy))
+    throw new Error('chrome-compatible user-agent profile requires native headless Chrome without a proxy.');
+  if (!['playwright', 'cdp'].includes(options.browserLauncher))
+    throw new Error('--browser-launcher must be playwright or cdp.');
+  if (options.browserLauncher === 'cdp' && (options.browser !== 'chrome' || options.mode !== 'headless' || options.proxy))
+    throw new Error('cdp browser launcher requires native headless Chrome without a proxy.');
   return options;
 }
 
@@ -167,6 +220,29 @@ export function sanitizeUrl(raw) {
   } catch { return { host: null, path: null }; }
 }
 
+
+export function verificationDependencyMetadata(raw, fields = {}) {
+  let url;
+  try { url = new URL(raw); } catch { return null; }
+  if (url.protocol !== 'https:' || !['www.google.com', 'www.gstatic.com', 'www.recaptcha.net', 'recaptcha.google.com'].includes(url.hostname) ||
+      !/^\/recaptcha(?:\/|$)/.test(url.pathname)) return null;
+  const metadata = { ...sanitizeUrl(raw), sourceRole: 'verification-dependency' };
+  for (const name of ['method', 'resourceType', 'status']) if (fields[name] !== undefined) metadata[name] = fields[name];
+  // Record only a browser error code, never a URL-bearing error message.
+  if (fields.failed) metadata.failed = /^net::[A-Z0-9_]+$/.test(fields.failed) ? fields.failed : 'DEPENDENCY_REQUEST_FAILED';
+  return metadata;
+}
+
+function verificationPageState(text) {
+  if (/complete (?:the )?(?:re)?captcha|solve (?:the )?(?:re)?captcha|verify you are human|human verification|security challenge|(?:i'm|i am) not a robot|select all (?:images|squares)/i.test(text))
+    return { code: 'CAPTCHA', detail: 'Air India Express displayed a human verification challenge.' };
+  if (/could not connect to the (?:re)?captcha service|(?:re)?captcha (?:service )?(?:is )?(?:unavailable|failed to load)|unable to (?:connect to|load) (?:the )?(?:re)?captcha/i.test(text))
+    return { code: 'VERIFICATION_SERVICE_UNAVAILABLE', detail: 'The page reported that its verification service could not connect or load; no interactive challenge was established.' };
+  if (/\b(?:re)?captcha challenge\b/i.test(text))
+    return { code: 'CAPTCHA', detail: 'Air India Express displayed a human verification challenge.' };
+  return null;
+}
+
 export function isFirstParty(raw) {
   const host = sanitizeUrl(raw).host;
   return host === 'airindiaexpress.com' || host?.endsWith('.airindiaexpress.com');
@@ -196,10 +272,43 @@ export function parseBookingHandoff(body) {
 }
 
 export function isFareResponseCandidate(record) {
-  return ['aix-site', 'aix-booking-engine'].includes(record?.sourceRole) &&
-    record.status >= 200 && record.status < 300 && /json/i.test(record.contentType || '') &&
-    /(?:flight|availability|offer|journey|itinerar|shopping|search)/i.test(record.path || '') &&
-    !/(?:airports|deeplink|histogram|promotion|marketing)/i.test(record.path || '');
+  return record?.host === 'api.airindiaexpress.com' &&
+    record.path === '/b2c-flightsearch/v4/fsa' && record.method === 'POST' &&
+    record.status === 200 && /json/i.test(record.contentType || '');
+}
+
+export const RESULT_READINESS_MS = 120000;
+
+export function incompleteSearchFailure(network, submittedAt, bookingHandoff) {
+  const post = network.filter(item => Date.parse(item.at) >= submittedAt);
+  const failed = post.find(item => item.failed && item.sourceRole !== 'verification-dependency' && ['document', 'xhr', 'fetch'].includes(item.resourceType));
+  if (failed) return coded('SITE_NETWORK_FAILURE', `${failed.failed} ${failed.host}${failed.path}`);
+  const pendingDocument = post.find(item => item.resourceType === 'document' && !item.status &&
+    !post.some(response => response.status && response.host === item.host && response.path === item.path &&
+      response.method === item.method && Date.parse(response.at) >= Date.parse(item.at)));
+  if (pendingDocument) return coded('TIMEOUT',
+    `Booking navigation timeout after ${RESULT_READINESS_MS} ms: no response for ${pendingDocument.host}${pendingDocument.path}; official FSA was not received.`);
+  return coded('TIMEOUT', bookingHandoff ?
+    `Booking handoff received, but official FSA response loading timeout after ${RESULT_READINESS_MS} ms.` :
+    `Submitted search loading timeout after ${RESULT_READINESS_MS} ms: no official FSA response or completed booking handoff.`);
+}
+
+export function selectVerifiedFareResponse(items, query, cards) {
+  let error;
+  for (const item of [...items].reverse()) {
+    if (item.metadata?.host !== 'api.airindiaexpress.com' ||
+        item.metadata?.path !== '/b2c-flightsearch/v4/fsa' ||
+        item.metadata?.method !== 'POST' || item.metadata?.status !== 200 ||
+        !isFareResponseCandidate(item.metadata)) continue;
+    try {
+      const parsed = parseSearchResponse(item.body, query, { cards });
+      if (!parsed?.fares.length) continue;
+      const coverage = matchFaresToCards(parsed.fares, cards, query);
+      return { parsed, response: item, coverage };
+    } catch (cause) { error = cause; }
+  }
+  throw coded('FARE_RESPONSE_UNVERIFIED', error?.message ||
+    'No official fare response matched the rendered results.');
 }
 
 export function selectBookingPage(pages, current, landingUrl = HOME, bookingHosts = new Set()) {
@@ -216,11 +325,20 @@ export function selectBookingPage(pages, current, landingUrl = HOME, bookingHost
   return current;
 }
 
+function explicitRateLimit(text) {
+  const normalized = String(text || '').replace(/[’‘]/g, "'").replace(/\s+/g, ' ');
+  if (/\bsearch after some time\b|\bplease try searching for flights after some time\b|\blooks like you've tried a few times\b/i.test(normalized))
+    return { code: 'RATE_LIMITED', detail: 'Air India Express requested a cooldown: search after some time.' };
+  return null;
+}
+
 export function classifyFailure(error, network = [], pageText = '') {
   const text = String(pageText);
-  const aixResponses = network.filter(x => x.sourceRole !== 'airport-suggestions');
-  if (/captcha|verify you are human|human verification|security challenge/i.test(text))
-    return { code: 'CAPTCHA', detail: 'Air India Express displayed a human verification challenge.' };
+  const cooldown = explicitRateLimit(text);
+  if (cooldown) return cooldown;
+  const aixResponses = network.filter(x => !['airport-suggestions', 'verification-dependency'].includes(x.sourceRole));
+  const verification = verificationPageState(text);
+  if (verification) return verification;
   if (/access denied|request blocked|not authorized to access/i.test(text) || aixResponses.some(x => x.status === 403))
     return { code: 'ACCESS_DENIED', detail: 'Air India Express denied access to the booking page or request.' };
   if (aixResponses.some(x => x.status === 429))
@@ -229,8 +347,8 @@ export function classifyFailure(error, network = [], pageText = '') {
     return { code: 'SESSION_EXPIRED', detail: 'The booking session expired or returned HTTP 401.' };
   if (error?.code && !['SITE_NETWORK_FAILURE', 'TIMEOUT'].includes(error.code))
     return { code: error.code, detail: error.message };
-  const transport = network.find(x => x.failed && ['document', 'xhr', 'fetch'].includes(x.resourceType)) ||
-    network.find(x => x.failed);
+  const transport = network.find(x => x.failed && x.sourceRole !== 'verification-dependency' && ['document', 'xhr', 'fetch'].includes(x.resourceType)) ||
+    network.find(x => x.failed && x.sourceRole !== 'verification-dependency');
   if (transport) return { code: 'SITE_NETWORK_FAILURE', detail: `${transport.failed} at ${transport.host || 'site'}${transport.path || ''}` };
   if (/timeout/i.test(error?.message || '')) return { code: 'TIMEOUT', detail: error.message };
   return { code: error?.code || 'SEARCH_FAILED', detail: error?.message || 'Search did not complete.' };
@@ -321,9 +439,11 @@ async function chooseDate(page, travelDate, delayMs) {
 
 export function classifyPageState(text, network = []) {
   const resultText = String(text || '');
-  const aixResponses = network.filter(x => x.sourceRole !== 'airport-suggestions');
-  if (/captcha|verify you are human|human verification|security challenge/i.test(resultText))
-    return { code: 'CAPTCHA', detail: 'Air India Express displayed a human verification challenge.' };
+  const cooldown = explicitRateLimit(resultText);
+  if (cooldown) return cooldown;
+  const aixResponses = network.filter(x => !['airport-suggestions', 'verification-dependency'].includes(x.sourceRole));
+  const verification = verificationPageState(resultText);
+  if (verification) return verification;
   if (/access denied|request blocked|not authorized to access/i.test(resultText) || aixResponses.some(x => x.status === 403))
     return { code: 'ACCESS_DENIED', detail: 'Air India Express denied access to the booking page or request.' };
   if (aixResponses.some(x => x.status === 429)) return { code: 'RATE_LIMITED', detail: 'Air India Express returned HTTP 429.' };
@@ -361,6 +481,9 @@ async function collectAttempt(context, query, directory, options, log, attempt) 
   let fareCaptureCount = 0;
   const recordRequest = request => {
     const url = request.url();
+    const dependency = verificationDependencyMetadata(url, { method: request.method(), resourceType: request.resourceType(),
+      ...(request.failure() ? { failed: request.failure().errorText } : {}) });
+    if (dependency) { network.push({ at: stamp(), ...dependency }); return; }
     if (!observed(url)) return;
     network.push({ at: stamp(), ...sanitizeUrl(url), sourceRole: role(url), method: request.method(),
       resourceType: request.resourceType(), ...(request.failure() ? { failed: request.failure().errorText } : {}) });
@@ -378,6 +501,9 @@ async function collectAttempt(context, query, directory, options, log, attempt) 
     }
   }) : null;
   const onResponse = response => {
+    const dependency = verificationDependencyMetadata(response.url(), { method: response.request().method(),
+      resourceType: response.request().resourceType(), status: response.status() });
+    if (dependency) { network.push({ at: stamp(), ...dependency }); return; }
     if (!observed(response.url())) return;
     const at = stamp();
     const item = { at, ...sanitizeUrl(response.url()), method: response.request().method(),
@@ -477,7 +603,7 @@ async function collectAttempt(context, query, directory, options, log, attempt) 
     await search.click({ timeout: 8000 });
     page = await popup || page;
     await stageLog('search_submitted');
-    const deadline = Date.now() + 45000;
+    const deadline = Date.now() + RESULT_READINESS_MS;
     let terminalState = null;
     while (Date.now() < deadline) {
       await Promise.allSettled(captureJobs);
@@ -487,7 +613,7 @@ async function collectAttempt(context, query, directory, options, log, attempt) 
       if (terminalState?.code === 'EMPTY_RESULTS') {
         // The SPA paints its empty-state shell while anonymous auth and FSA
         // are still pending. An empty message alone cannot end the search.
-        const actual = responseBodies.find(item => item.metadata.host === 'api.airindiaexpress.com' &&
+        const actual = [...responseBodies].reverse().find(item => item.metadata.host === 'api.airindiaexpress.com' &&
           item.metadata.path === '/b2c-flightsearch/v4/fsa' && isFareResponseCandidate(item.metadata));
         let emptyConfirmed = false;
         if (actual) {
@@ -501,48 +627,28 @@ async function collectAttempt(context, query, directory, options, log, attempt) 
           /\bIX\s?\d{1,4}\b/i.test(text))) break;
       const submittedNetwork = network.filter(x => Date.parse(x.at) >= submittedAt);
       const failed = submittedNetwork.find(x => x.failed &&
-        ['document', 'xhr', 'fetch'].includes(x.resourceType) && x.sourceRole !== 'airport-suggestions');
+        ['document', 'xhr', 'fetch'].includes(x.resourceType) && !['airport-suggestions', 'verification-dependency'].includes(x.sourceRole));
       if (failed) throw coded('SITE_NETWORK_FAILURE', `${failed.failed} ${failed.host}${failed.path}`);
       await page.waitForTimeout(350);
     }
     await Promise.allSettled(captureJobs);
     const resultEvidence = await savePage(page, directory, `result-attempt-${attempt}`);
     await writeJson(path.join(directory, `network-attempt-${attempt}.json`), network);
-    if (terminalState?.code === 'CAPTCHA' || terminalState?.code === 'ACCESS_DENIED' ||
-        terminalState?.code === 'RATE_LIMITED' || terminalState?.code === 'SESSION_EXPIRED')
+    if (DENIALS.has(terminalState?.code))
       throw coded(terminalState.code, terminalState.detail);
     if (terminalState?.code === 'EMPTY_RESULTS')
       throw coded('EMPTY_RESULTS', terminalState.detail);
     const fareResponses = responseBodies.filter(item => isFareResponseCandidate(item.metadata));
-    if (!fareResponses.length) {
-      const post = network.filter(x => Date.parse(x.at) >= submittedAt);
-      const failed = post.find(x => x.failed);
-      if (failed) throw coded('SITE_NETWORK_FAILURE', `${failed.failed} ${failed.host}${failed.path}`);
-      throw coded('FARE_RESPONSE_UNVERIFIED', bookingHandoff ?
-        'Booking handoff was received, but no JSON fare response from the booking engine was captured.' :
-        'Search was submitted, but no verified booking handoff or JSON fare response was captured.');
-    }
+    if (!fareResponses.length) throw incompleteSearchFailure(network, submittedAt, bookingHandoff);
     await stageLog('airline_response_received');
     if (!/\bIX\s?\d{1,4}\b/i.test(await pageText(page)))
-      throw coded('RESULTS_NOT_RENDERED', 'The booking engine returned JSON but no IX flight rows were rendered.');
+      throw coded('TIMEOUT', `Official FSA received, but flight row rendering timeout after ${RESULT_READINESS_MS} ms.`);
     await stageLog('results_rendered');
-    let parsed = null;
-    let parsedResponse = null;
-    let schemaError = null;
-    for (const item of fareResponses) {
-      try {
-        parsed = parseSearchResponse(item.body, query);
-        if (parsed) { parsedResponse = item; break; }
-      } catch (error) { schemaError = error; }
-    }
-    if (!parsed) throw coded('FARE_RESPONSE_UNVERIFIED', schemaError?.message ||
-      'AIX returned JSON, but its fare response schema has not been verified from a live search.');
-    if (!parsed.fares?.length) throw coded('EMPTY_RESULTS', 'The verified airline response contained no matching IX itineraries.');
     if (!formEvidence.html || !resultEvidence.html || !resultEvidence.screenshot)
       throw coded('EVIDENCE_UNAVAILABLE', 'Submitted form, result HTML or result screenshot could not be saved.');
     const resultHtml = await fs.readFile(path.join(directory, resultEvidence.html), 'utf8');
     const cards = extractCardsFromHtml(resultHtml);
-    const coverage = matchFaresToCards(parsed.fares, cards, query);
+    const { parsed, response: parsedResponse, coverage } = selectVerifiedFareResponse(fareResponses, query, cards);
     const evidence = {
       formPage: { file: formEvidence.html, sha256: formEvidence.htmlSha256 },
       resultPage: { file: resultEvidence.html, sha256: resultEvidence.htmlSha256 },
@@ -596,11 +702,17 @@ export async function collect(options) {
   const id = `${stamp().replace(/[:.]/g, '-')}-${crypto.randomBytes(3).toString('hex')}`;
   const runDir = path.join(options.output, id);
   await fs.mkdir(runDir, { recursive: true, mode: 0o700 });
-  const profile = options.profile || path.join(root, '.session', 'web-agents', options.browser, options.mode, 'agent-1');
+  const profile = options.profile || path.join(root, '.session', 'web-agents', options.browser, options.mode,
+    ...(options.userAgentProfile === 'chrome-compatible' ? ['chrome-compatible'] : []), 'agent-1');
   const manifest = { id, startedAt: stamp(), finishedAt: null, source: HOME,
     sourceFingerprint: await sourceFingerprint(), browser: options.browser, browserMode: options.mode,
-    browserTransport: options.mode === 'headed' && options.browser === 'chrome' && !options.proxy ?
+    browserLauncher: options.browserLauncher || 'playwright',
+    browserTransport: options.browser === 'chrome' && !options.proxy &&
+      (options.mode === 'headed' || options.browserLauncher === 'cdp') ?
       'external-chrome-cdp' : 'playwright-launch',
+    userAgentProfile: options.userAgentProfile || 'native', userAgent: null, installedBrowserVersion: null,
+    browserProcess: null,
+    nativeHeadless: options.mode === 'headless',
     disableHttp2: options.disableHttp2, profile, interactionDelayMs: options.interactionDelayMs,
     httpTransport: options.httpTransport === 'native' ? 'browser-native' : 'playwright-http1-forwarder',
     renewSessionRequested: Boolean(options.renewSession),
@@ -619,6 +731,15 @@ export async function collect(options) {
     await fs.mkdir(profile, { recursive: true, mode: 0o700 });
     browserSession = await launchBrowser(profile, options);
     context = browserSession.context;
+    if (browserSession.processEvidence) {
+      manifest.browserProcess = browserSession.processEvidence;
+      await writeJson(path.join(runDir, 'manifest.json'), manifest);
+    }
+    if (browserSession.userAgentProfile) {
+      manifest.userAgent = browserSession.userAgentProfile.userAgent;
+      manifest.installedBrowserVersion = browserSession.userAgentProfile.installedBrowserVersion;
+      await writeJson(path.join(runDir, 'manifest.json'), manifest);
+    }
     if (options.renewSession) {
       await context.clearCookies({ domain: /(^|\.)airindiaexpress\.com$/i });
       await log('session_renewed', { reason: 'explicit renewal of AIX cookies', profilePreserved: true });
@@ -649,7 +770,8 @@ export async function collect(options) {
         await log('search_start', { query, attempt });
         result = await collectAttempt(context, query, dir, options, log, attempt);
         if (attempt === 1 + (options.retries ?? 1) || !['SITE_NETWORK_FAILURE', 'TIMEOUT', 'FORM_NOT_READY'].includes(result.cause?.code)) break;
-        const delayMs = 6000 + crypto.randomInt(0, 1500);
+        const delayMs = retryDelayMs(lastSubmit, Date.now(), options.minIntervalMs,
+          6000 + crypto.randomInt(0, 1500));
         await log('backoff', { query, attempt, delayMs, cause: result.cause });
         if (result.stage === 'browser_ready' && result.cause?.code === 'SITE_NETWORK_FAILURE' &&
             !result.network?.some(item => [401, 403, 429].includes(item.status))) {
@@ -658,6 +780,7 @@ export async function collect(options) {
             profilePreserved: true });
         }
         await sleep(delayMs);
+        lastSubmit = Date.now();
       }
       await writeJson(path.join(dir, 'result.json'), result);
       if (result.status === 'ok') {
@@ -700,7 +823,7 @@ export async function collect(options) {
 
 async function sourceFingerprint() {
   const files = ['src/collect.mjs', 'src/parse.mjs', 'src/verify.mjs', 'src/browser-path.mjs',
-    'src/browser-admission.mjs', 'src/web-jobs.mjs', 'src/http-transport.mjs', 'package-lock.json'];
+    'src/browser-admission.mjs', 'src/web-jobs.mjs', 'src/http-transport.mjs', 'src/user-agent-profile.mjs', 'package-lock.json'];
   const chunks = await Promise.all(files.map(file => fs.readFile(path.join(root, file))));
   return sha256(Buffer.concat(chunks));
 }

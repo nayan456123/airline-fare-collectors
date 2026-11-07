@@ -12,6 +12,7 @@ test('the route/date plan deduplicates inputs and caps work and agents', () => {
     offsets: [5, 1, 5], concurrency: 1, browserMode: 'headed' },
   new Date('2026-09-27T06:00:00Z'));
   assert.equal(plan.tasks.length, 4);
+  assert.equal(validatePlan({ routes: ['DEL-BOM'], offsets: [1] }).browserMode, 'headless');
   assert.equal(plan.tasks[0].travelDate, '2026-09-28');
   assert.equal(plan.tasks[1].travelDate, '2026-10-02');
   assert.throws(() => validatePlan({ routes: ['DEL-DEL'], offsets: [1] }), /Invalid route/);
@@ -37,7 +38,7 @@ test('one worker runs searches sequentially with a paced launch interval', async
     memoryInfo: async () => ({ totalBytes: 16 * 1024 ** 3, availableBytes: 12 * 1024 ** 3 }) });
   try {
     const job = await manager.create({ routes: ['DEL-BOM', 'DEL-BLR'], offsets: [1],
-      concurrency: 1, browserMode: 'headless' });
+      concurrency: 1 });
     await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('First search did not launch')), 1000);
       const poll = setInterval(() => {
@@ -45,6 +46,9 @@ test('one worker runs searches sequentially with a paced launch interval', async
       }, 5);
     });
     assert.equal(starts.length, 1);
+    assert.ok(starts[0].args.includes('--headless'));
+    assert.ok(!starts[0].args.includes('--headed'));
+    if (!process.env.AIX_PROXY_SERVER) assert.match(starts[0].args[starts[0].args.indexOf('--profile') + 1], /headless[/\\]chrome-compatible[/\\]agent-1$/);
     assert.equal((await manager.get(job.id)).tasks.filter(task => task.status === 'running').length, 1);
     children[0].emit('close', 2, null);
     await new Promise((resolve, reject) => {
@@ -83,7 +87,7 @@ test('a stopped server records interrupted work on disk', async () => {
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test('CAPTCHA stops queued searches before another airline request starts', async () => {
+for (const denial of ['CAPTCHA', 'RATE_LIMITED', 'VERIFICATION_SERVICE_UNAVAILABLE']) test(`${denial} stops queued searches before another airline request starts`, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'aix-denial-'));
   let child;
   const manager = new JobManager({ root, packageRoot: root, minLaunchGapMs: 1000,
@@ -101,8 +105,8 @@ test('CAPTCHA stops queued searches before another airline request starts', asyn
     while (!child) await new Promise(resolve => setTimeout(resolve, 5));
     const job = manager.jobs.get(created.id);
     await manager.event(job, job.tasks[0], { event: 'failure',
-      cause: { code: 'CAPTCHA', detail: 'Challenge shown' } });
-    assert.equal(job.stopReason, 'CAPTCHA');
+      cause: { code: denial, detail: 'Airline requested stop' } });
+    assert.equal(job.stopReason, denial);
     assert.equal(job.tasks[1].status, 'skipped');
     assert.equal(job.tasks[1].worker, null);
     child.emit('close', 2, null);

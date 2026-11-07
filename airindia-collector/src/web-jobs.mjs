@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { tryBrowserLease } from './browser-admission.mjs';
 import { verifySearch } from './verify.mjs';
+import { resolveEntryUrl } from './entry-url.mjs';
 
 export const STAGES = Object.freeze([
   'browser_ready', 'homepage_loaded', 'airports_ready', 'form_confirmed',
@@ -16,6 +17,8 @@ const DENIAL = new Set(['ACCESS_DENIED', 'CAPTCHA', 'RATE_LIMITED', 'SESSION_EXP
 const MAX_TASKS = 54;
 const MAX_WORKERS = 3;
 const inputError = message => Object.assign(new Error(message), { status: 400 });
+const browserTransportFor = (browserMode, proxyConfigured) =>
+  proxyConfigured ? 'playwright-launch' : 'external-chrome-cdp';
 
 export async function findAudioPython(packageRoot, env = process.env) {
   if (env.AIRINDIA_SOLVER_PYTHON) return env.AIRINDIA_SOLVER_PYTHON;
@@ -51,7 +54,7 @@ export function validatePlan(input, at = new Date()) {
     throw inputError(`Agents must be between 1 and ${MAX_WORKERS}.`);
   if (routes.length * offsets.length > MAX_TASKS)
     throw inputError(`This batch is limited to ${MAX_TASKS} searches.`);
-  const browserMode = input.browserMode ?? 'headed';
+  const browserMode = input.browserMode ?? 'headless';
   if (!['headed', 'headless'].includes(browserMode))
     throw inputError('Browser mode must be headed or headless.');
   const audioCaptchaSolver = input.audioCaptchaSolver === true;
@@ -104,6 +107,9 @@ export class JobManager extends EventEmitter {
       requestedConcurrency: job.requestedConcurrency,
       resourceNote: job.resourceNote,
       browserMode: job.browserMode,
+      browserTransport: job.browserTransport,
+      disableHttp2: job.disableHttp2,
+      entryUrl: job.entryUrl,
       audioCaptchaSolver: Boolean(job.audioCaptchaSolver),
       tasks: job.tasks.map(publicTask) };
   }
@@ -134,6 +140,10 @@ export class JobManager extends EventEmitter {
       concurrency: plan.concurrency, requestedConcurrency: plan.requestedConcurrency || plan.concurrency,
       resourceNote: plan.resourceNote || null,
       browserMode: plan.browserMode, audioCaptchaSolver: Boolean(plan.audioCaptchaSolver),
+      proxyConfigured: Boolean(process.env.AIRINDIA_PROXY_SERVER),
+      browserTransport: browserTransportFor(plan.browserMode, Boolean(process.env.AIRINDIA_PROXY_SERVER)),
+      disableHttp2: plan.browserMode === 'headless' && !process.env.AIRINDIA_PROXY_SERVER,
+      entryUrl: resolveEntryUrl(plan.entryUrl),
       audioSolverPython: plan.audioSolverPython, retryOf,
       writeChain: Promise.resolve(),
       tasks: plan.tasks.map((task, index) => ({ ...task, id: String(index + 1).padStart(3, '0'),
@@ -157,6 +167,8 @@ export class JobManager extends EventEmitter {
   }
 
   async admitPlan(plan) {
+    try { plan = { ...plan, entryUrl: resolveEntryUrl(plan.entryUrl) }; }
+    catch (error) { throw inputError(error.message); }
     let audioSolverPython;
     if (plan.audioCaptchaSolver) {
       if (process.env.AIRINDIA_PROXY_SERVER)
@@ -176,15 +188,16 @@ export class JobManager extends EventEmitter {
     const source = await this.get(runId);
     const task = source?.tasks.find(item => item.id === taskId);
     if (!task) throw inputError('Saved search not found.');
+    if (DENIAL.has(source.stopReason) || source.tasks.some(item => DENIAL.has(item.cause?.code)))
+      throw Object.assign(new Error('Air India denied access. Check access before starting a new search.'), { status: 409 });
     if (!['failed', 'partial', 'skipped', 'interrupted'].includes(task.status))
       throw Object.assign(new Error('Only unfinished searches can be run again.'), { status: 409 });
-    if (DENIAL.has(source.stopReason) || DENIAL.has(task.cause?.code))
-      throw Object.assign(new Error('Air India denied access. Check access before starting a new search.'), { status: 409 });
     if (task.travelDate <= istDate(0))
       throw Object.assign(new Error('This travel date has passed. Choose a future date in a new collection.'), { status: 409 });
     const route = { origin: task.origin, destination: task.destination };
     return this.createPlan(await this.admitPlan({ routes: [route], offsets: [task.offset], concurrency: 1,
       browserMode: source.browserMode || 'headed',
+      entryUrl: source.entryUrl,
       audioCaptchaSolver: Boolean(source.audioCaptchaSolver),
       tasks: [{ ...route, offset: task.offset, travelDate: task.travelDate }] }),
     { runId, taskId });
@@ -195,7 +208,7 @@ export class JobManager extends EventEmitter {
     if (!source) throw inputError('Saved run not found.');
     if (['running', 'stopping'].includes(source.status))
       throw Object.assign(new Error('Wait until the saved run finishes.'), { status: 409 });
-    if (DENIAL.has(source.stopReason))
+    if (DENIAL.has(source.stopReason) || source.tasks.some(task => DENIAL.has(task.cause?.code)))
       throw Object.assign(new Error('Air India denied access. Check access before retrying.'), { status: 409 });
     const tasks = source.tasks.filter(task =>
       ['failed', 'partial', 'skipped', 'interrupted'].includes(task.status) &&
@@ -208,6 +221,7 @@ export class JobManager extends EventEmitter {
     const offsets = [...new Set(tasks.map(task => task.offset))].sort((a, b) => a - b);
     return this.createPlan(await this.admitPlan({ routes, offsets,
       browserMode: source.browserMode || 'headed', concurrency: Math.min(MAX_WORKERS, source.concurrency || 1, tasks.length),
+      entryUrl: source.entryUrl,
       audioCaptchaSolver: Boolean(source.audioCaptchaSolver),
       tasks: tasks.map(task => ({ origin: task.origin, destination: task.destination,
         travelDate: task.travelDate, offset: task.offset })) }),
@@ -235,15 +249,34 @@ export class JobManager extends EventEmitter {
       const snapshot = JSON.parse(await fs.readFile(path.join(this.root, id, 'jobs.json'), 'utf8'));
       if (['running', 'stopping'].includes(snapshot.status)) {
         const recoveredAt = new Date().toISOString();
+        if (!DENIAL.has(snapshot.stopReason)) {
+          const knownDenial = snapshot.tasks.find(task => task.status === 'running' &&
+            DENIAL.has(task.cause?.code));
+          if (knownDenial) snapshot.stopReason = knownDenial.cause.code;
+        }
         snapshot.status = 'interrupted';
-        snapshot.stopReason = 'Server stopped while this batch was running';
+        if (!DENIAL.has(snapshot.stopReason))
+          snapshot.stopReason = 'Server stopped while this batch was running';
         snapshot.finishedAt = recoveredAt;
         for (const task of snapshot.tasks) if (['queued', 'running'].includes(task.status)) {
-          task.status = 'interrupted';
-          task.cause = { code: 'SERVER_INTERRUPTED' };
+          const denialCause = task.status === 'running' && DENIAL.has(task.cause?.code);
+          task.status = denialCause ? 'blocked' : 'interrupted';
+          if (denialCause) {
+            // Keep the collector's known denial attached to its actual task.
+            // Denials never produce verified fare rows.
+            task.fares = [];
+            task.fareCount = 0;
+            task.evidenceVerified = false;
+            task.evidenceErrors = [];
+            task.coverage = null;
+            task.observedFareCount = 0;
+            task.expectedJourneys = null;
+          } else {
+            task.cause = { code: 'SERVER_INTERRUPTED' };
+            task.events.push({ at: recoveredAt, event: 'server_interrupted',
+              stage: task.stage, code: 'SERVER_INTERRUPTED', message: null });
+          }
           task.finishedAt = recoveredAt;
-          task.events.push({ at: recoveredAt, event: 'server_interrupted',
-            stage: task.stage, code: 'SERVER_INTERRUPTED', message: null });
         }
         const file = path.join(this.root, id, 'jobs.json');
         const temporary = `${file}.${process.pid}.${crypto.randomBytes(3).toString('hex')}.tmp`;
@@ -270,6 +303,7 @@ export class JobManager extends EventEmitter {
     const runs = await Promise.all(names.map(id => this.get(id)));
     return runs.filter(Boolean).map(run => ({ id: run.id, status: run.status,
       startedAt: run.startedAt, browserMode: run.browserMode || 'headed',
+      browserTransport: run.browserTransport || null,
       routes: run.routes?.map(route => `${route.origin}-${route.destination}`) || [],
       searches: run.tasks?.length || 0 }));
   }
@@ -320,16 +354,22 @@ export class JobManager extends EventEmitter {
     task.startedAt = new Date().toISOString();
     const output = path.join(job.root, `agent-${worker}`);
     const profileMode = job.browserMode;
-    const profile = worker === 1 && profileMode === 'headed' &&
+    const headlessDirect = profileMode === 'headless' && !process.env.AIRINDIA_PROXY_SERVER;
+    const profile = headlessDirect ?
+      path.join(this.packageRoot, '.session', 'dashboard-headless', job.id, task.id) :
+      worker === 1 && profileMode === 'headed' &&
       !process.env.AIRINDIA_PROXY_SERVER ?
       path.join(this.packageRoot, '.session', 'headed') :
-      path.join(this.packageRoot, '.session', 'web-agents', profileMode, `agent-${worker}`);
+      path.join(this.packageRoot, '.session', 'web-agents',
+        profileMode === 'headless' && !process.env.AIRINDIA_PROXY_SERVER ? 'headless-compatible' : profileMode, `agent-${worker}`);
     const args = [path.join(this.packageRoot, 'src', 'collect.mjs'),
       '--search', `${task.origin}:${task.destination}:${task.travelDate}`,
+      '--entry-url', job.entryUrl,
       '--output', output, '--profile', profile, '--interaction-delay-ms', '1800',
       '--min-interval-ms', '20000', '--retries', '1',
       '--defer-verification',
       job.browserMode === 'headless' ? '--headless' : '--headed'];
+    if (job.disableHttp2) args.push('--disable-http2');
     if (process.env.AIRINDIA_PROXY_SERVER) args.push('--proxy', process.env.AIRINDIA_PROXY_SERVER);
     if (job.browserMode === 'headed' && !process.env.AIRINDIA_PROXY_SERVER) {
       args.push('--external-chrome');
@@ -437,8 +477,8 @@ export class JobManager extends EventEmitter {
     await this.publish(job);
     if (DENIAL.has(task.cause?.code)) await this.stop(job, task.cause.code, task.id);
     if (job.status === 'running') {
-      const repeatable = new Set(['SITE_NETWORK_FAILURE', 'TLS_TRUST_FAILURE',
-        'AIRPORT_PICKER_UNAVAILABLE', 'RESULTS_UNVERIFIED', 'FORM_UNCONFIRMED']);
+      const repeatable = new Set(['SITE_ERROR', 'SITE_NETWORK_FAILURE', 'TLS_TRUST_FAILURE',
+        'AIRPORT_PICKER_UNAVAILABLE', 'RESULTS_NOT_RENDERED', 'RESULTS_UNVERIFIED', 'FORM_UNCONFIRMED']);
       const code = task.status === 'failed' ? task.cause?.code : null;
       job.lastFailure = repeatable.has(code) ?
         { code, count: job.lastFailure?.code === code ? job.lastFailure.count + 1 : 1 } : null;

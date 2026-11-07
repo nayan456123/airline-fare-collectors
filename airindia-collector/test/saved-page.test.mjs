@@ -23,3 +23,27 @@ test('saved-page parsing checks the displayed fare and exact airport', () => {
   assert.throws(() => matchFaresToCards([fare], cards,
     { origin: 'DEL', destination: 'NMI' }), /page showed 0/);
 });
+
+test('saved-page parsing rejects empty and decimal fare text', () => {
+  for (const price of ['', '₹ 6,581.50']) {
+    const html = `<div class="ai-pb-flight-item">
+      <span class="ai-pb-price">${price}</span>
+    </div>`;
+    const card = extractCardsFromHtml(html)[0];
+    assert.equal(card.displayedTotal, null);
+    assert.throws(() => matchFaresToCards([{
+      flight: '', departureTime: '', arrivalTime: '',
+      price: { currency: 'INR', displayedTotal: 6581 }
+    }], [card], { origin: '', destination: '' }), error => error.code === 'RESULTS_UNVERIFIED');
+  }
+});
+
+test('a single matching page card cannot verify two fares', () => {
+  const fare = { flight: 'AI 123', departureTime: '09:00', arrivalTime: '11:15',
+    price: { currency: 'INR', displayedTotal: 6581 } };
+  const matching = { flight: 'AI 123', origin: 'DEL', destination: 'BOM',
+    departureTime: '09:00', arrivalTime: '11:15', currency: 'INR', displayedTotal: 6581 };
+  const other = { ...matching, flight: 'AI 456' };
+  assert.throws(() => matchFaresToCards([fare, fare], [matching, other],
+    { origin: 'DEL', destination: 'BOM' }), error => error.code === 'RESULTS_UNVERIFIED');
+});

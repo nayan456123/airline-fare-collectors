@@ -12,7 +12,7 @@ export const STAGES = Object.freeze([
   'fare_verified', 'complete'
 ]);
 export const OFFSETS = Object.freeze([1, 5, 9, 15, 30, 45]);
-const DENIAL = new Set(['ACCESS_DENIED', 'CAPTCHA', 'RATE_LIMITED', 'SESSION_EXPIRED']);
+const DENIAL = new Set(['ACCESS_DENIED', 'CAPTCHA', 'RATE_LIMITED', 'SESSION_EXPIRED', 'VERIFICATION_SERVICE_UNAVAILABLE']);
 const MAX_TASKS = 54;
 const MAX_WORKERS = 1;
 const inputError = message => Object.assign(new Error(message), { status: 400 });
@@ -41,7 +41,7 @@ export function validatePlan(input, at = new Date()) {
     throw inputError(`Agents must be between 1 and ${MAX_WORKERS}.`);
   if (routes.length * offsets.length > MAX_TASKS)
     throw inputError(`This batch is limited to ${MAX_TASKS} searches.`);
-  const browserMode = input.browserMode ?? 'headed';
+  const browserMode = input.browserMode ?? 'headless';
   if (!['headed', 'headless'].includes(browserMode))
     throw inputError('Browser mode must be headed or headless.');
   const browser = input.browser ?? 'chrome';
@@ -68,7 +68,7 @@ const publicTask = task => ({
 
 export class JobManager extends EventEmitter {
   constructor({ root, packageRoot, minLaunchGapMs = 20000, spawnWorker = spawn,
-    workerTimeoutMs = 240000 } = {}) {
+    workerTimeoutMs = 600000 } = {}) {
     super();
     this.root = path.resolve(root);
     this.packageRoot = path.resolve(packageRoot);
@@ -296,7 +296,9 @@ export class JobManager extends EventEmitter {
     const output = path.join(job.root, `agent-${worker}`);
     const profileMode = job.browserMode;
     const profile = path.join(this.packageRoot, '.session', 'web-agents',
-      job.browser, profileMode, `agent-${worker}`);
+      job.browser, profileMode,
+      ...(job.browserMode === 'headless' && job.browser === 'chrome' && !process.env.AIX_PROXY_SERVER ? ['chrome-compatible'] : []),
+      `agent-${worker}`);
     const args = [path.join(this.packageRoot, 'src', 'collect.mjs'),
       '--search', `${task.origin}:${task.destination}:${task.travelDate}`,
       '--output', output, '--profile', profile, '--interaction-delay-ms', '1800',

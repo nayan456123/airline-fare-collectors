@@ -14,9 +14,13 @@ function rowFacts(html) {
   price: parseDisplayedPrice(text) };
 }
 
-export async function verifySearch(directory) {
+export async function verifySearch(directory, expectedQuery = null) {
   const errors = [];
   const result = JSON.parse(await fs.readFile(path.join(directory, 'result.json'), 'utf8'));
+  if (expectedQuery && (!result.query || ['origin', 'destination', 'travelDate'].some(key =>
+    result.query[key] !== expectedQuery[key])))
+    return { ok: false, errors: ['Result query does not match manifest search'],
+      query: result.query };
   if (result.status !== 'ok') return { ok: false, errors: [`Search status is ${result.status}`] };
   if (!result.fares?.length || result.fares.length !== result.expectedJourneys ||
       result.pageRows !== result.expectedJourneys || result.issues?.length)
@@ -89,12 +93,42 @@ export async function verifySearch(directory) {
 export async function verifyRun(directory) {
   const manifest = JSON.parse(await fs.readFile(path.join(directory, 'manifest.json'), 'utf8'));
   const checks = [];
-  for (const [index, query] of manifest.searches.entries()) {
+  const searches = manifest.searches;
+  if (!Array.isArray(searches) || searches.length === 0)
+    return { run: manifest.id, status: manifest.status, ok: false,
+      checks: [{ name: 'manifest', ok: false, errors: ['Manifest has no searches'] }] };
+  if (!['complete', 'partial', 'blocked', 'failed'].includes(manifest.status))
+    return { run: manifest.id, status: manifest.status, ok: false,
+      checks: [{ name: 'manifest', ok: false, errors: ['Manifest has invalid or unfinished run status'] }] };
+  const resultStatuses = [];
+  for (const [index, query] of searches.entries()) {
+    if (!query || !/^[A-Z]{3}$/.test(query.origin || '') ||
+        !/^[A-Z]{3}$/.test(query.destination || '') ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(query.travelDate || '')) {
+      checks.push({ name: `search-${index + 1}`, ok: false,
+        errors: ['Manifest search has an invalid route or travel date'] });
+      continue;
+    }
     const name = `${String(index + 1).padStart(2, '0')}-${query.origin}-${query.destination}-${query.travelDate}`;
-    try { checks.push({ name, ...await verifySearch(path.join(directory, name)) }); }
+    try {
+      const saved = JSON.parse(await fs.readFile(path.join(directory, name, 'result.json'), 'utf8'));
+      resultStatuses.push(saved.status);
+    } catch { resultStatuses.push(null); }
+    try { checks.push({ name, ...await verifySearch(path.join(directory, name), query) }); }
     catch (error) { checks.push({ name, ok: false, errors: [error.message] }); }
   }
-  return { run: manifest.id, status: manifest.status, ok: checks.every(check => check.ok), checks };
+  if (manifest.status === 'complete' && checks.some(check => !check.ok))
+    checks.push({ name: 'manifest', ok: false,
+      errors: ['Manifest claims completion while a search did not verify'] });
+  if (manifest.status === 'partial' && resultStatuses.every(status => status === 'ok'))
+    checks.push({ name: 'manifest', ok: false,
+      errors: ['Manifest claims a partial run but every search is marked successful'] });
+  if (manifest.status === 'blocked' && !resultStatuses.includes('blocked'))
+    checks.push({ name: 'manifest', ok: false,
+      errors: ['Manifest claims a blocked run without a blocked search'] });
+  const searchesVerified = checks.every(check => check.ok);
+  return { run: manifest.id, status: manifest.status,
+    ok: manifest.status === 'complete' && searchesVerified, checks };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -1,3 +1,5 @@
+import { DENIAL_CODES, retryableTasks, runHasDenial } from './retry-eligibility.js';
+
 const STAGES = [
   ['browser_ready', 'Browser'], ['homepage_loaded', 'Homepage'],
   ['airports_ready', 'Airports'], ['form_confirmed', 'Route + date'],
@@ -7,7 +9,7 @@ const STAGES = [
   ['complete', 'Complete']
 ];
 const OFFSETS = [1, 5, 9, 15, 30, 45];
-const DENIALS = new Set(['ACCESS_DENIED', 'CAPTCHA', 'RATE_LIMITED', 'SESSION_EXPIRED', 'SESSION_INVALID']);
+const DENIALS = DENIAL_CODES;
 const $ = selector => document.querySelector(selector);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g,
   char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
@@ -70,8 +72,9 @@ function evidenceUrl(run, task, file) {
 }
 
 function retryAction(run, task) {
-  if (!['failed', 'partial', 'skipped', 'interrupted'].includes(task.status) ||
-      DENIALS.has(run.stopReason) || DENIALS.has(task.cause?.code) ||
+  if (['running', 'stopping'].includes(run.status) ||
+      !['failed', 'partial', 'skipped', 'interrupted'].includes(task.status) ||
+      runHasDenial(run) || DENIALS.has(task.cause?.code) ||
       task.travelDate <= dateFor(0)) return '';
   const label = task.status === 'skipped' ? 'Run this search' : 'Retry this search';
   const route = `${task.origin} to ${task.destination} on ${niceDate(task.travelDate)}`;
@@ -84,7 +87,7 @@ function causeSummary(task) {
     CAPTCHA: task.cause?.detail?.includes('audio_unrecognized') ?
       'The audio check could not be understood. The batch stopped.' :
       'Air India requested human verification. The batch stopped.',
-    ACCESS_DENIED: 'Air India denied access to the booking results. The batch stopped.',
+    ACCESS_DENIED: 'Air India denied a search request. The batch stopped.',
     RATE_LIMITED: 'Air India limited requests. The batch stopped.',
     SESSION_EXPIRED: 'The booking session expired. The batch stopped.',
     AIRLINE_SCHEMA_UNVERIFIED: 'Flight response fields could not be verified.',
@@ -94,6 +97,7 @@ function causeSummary(task) {
     DATE_UNAVAILABLE: 'The travel date did not appear in Air India’s calendar.',
     TLS_TRUST_FAILURE: 'The browser could not verify an Air India certificate.',
     SITE_NETWORK_FAILURE: 'The flight request ended before a fare response arrived.',
+    SITE_ERROR: 'Air India reported a problem processing this search.',
     BATCH_STOPPED: 'This search was interrupted when the batch stopped.' })[task.cause?.code] ||
     'This search did not produce verified fares.';
 }
@@ -105,7 +109,7 @@ function taskHtml(run, task) {
   const sorted = [...task.fares].sort((a, b) => a.price.displayedTotal - b.price.displayedTotal ||
     String(a.departureTime || '').localeCompare(String(b.departureTime || '')));
   const lowest = sorted[0]?.price.displayedTotal;
-  const fareRows = sorted.map(fare => `<tr><td class="flight-name">${escapeHtml(fare.flight)}</td><td>${escapeHtml(fare.departureTime || '—')} → ${escapeHtml(fare.arrivalTime || '—')}</td><td>${fare.stops === 0 ? 'Non-stop' : Number.isInteger(fare.stops) ? `${fare.stops} stop${fare.stops === 1 ? '' : 's'}` : '—'}</td><td class="price-cell">${money(fare.price.displayedTotal)}${fare.price.displayedTotal === lowest ? ' <span class="low-tag">Lowest</span>' : ''}</td><td class="breakdown-cell">${money(fare.price.base)}</td><td>${money(fare.price.taxesAndFees)}</td><td>${money(fare.price.additionalUnitemizedAmount)}</td><td>${money(fare.price.fullTotal)}</td><td>${fare.rowFile ? `<a href="${evidenceUrl(run, task, fare.rowFile)}" download>Row ↓</a>` : `<a href="${evidenceUrl(run, task, fare.screenshot)}" target="_blank" rel="noopener">Page ↗</a>`}</td></tr>`).join('');
+  const fareRows = sorted.map(fare => `<tr><td class="flight-name">${escapeHtml(fare.flight)}${fare.cabin ? `<br><small>${escapeHtml(fare.cabin)}</small>` : ''}</td><td>${escapeHtml(fare.departureTime || '—')} → ${escapeHtml(fare.arrivalTime || '—')}</td><td>${fare.stops === 0 ? 'Non-stop' : Number.isInteger(fare.stops) ? `${fare.stops} stop${fare.stops === 1 ? '' : 's'}` : '—'}</td><td class="price-cell">${money(fare.price.displayedTotal)}${fare.price.displayedTotal === lowest ? ' <span class="low-tag">Lowest</span>' : ''}</td><td class="breakdown-cell">${money(fare.price.base)}</td><td>${money(fare.price.taxesAndFees)}</td><td>${money(fare.price.additionalUnitemizedAmount)}</td><td>${money(fare.price.fullTotal)}</td><td>${fare.rowFile ? `<a href="${evidenceUrl(run, task, fare.rowFile)}" download>Row ↓</a>` : `<a href="${evidenceUrl(run, task, fare.screenshot)}" target="_blank" rel="noopener">Page ↗</a>`}</td></tr>`).join('');
   const evidence = sorted[0] ? `<div class="fare-evidence"><a href="${evidenceUrl(run, task, sorted[0].screenshot)}" target="_blank" rel="noopener">Result screenshot ↗</a>${sorted[0].resultPage ? `<a href="${evidenceUrl(run, task, sorted[0].resultPage)}" download>Saved page ↓</a>` : ''}<a href="${evidenceUrl(run, task, sorted[0].response)}" download>Airline response ↓</a></div>` : '';
   const fares = sorted.length ? `<div class="fare-list"><div class="fare-list-head"><strong>${task.coverage ? `${task.coverage.captured} of ${task.coverage.expectedJourneys} flights verified` : `${sorted.length} verified flights`}</strong><span>Lowest displayed fare: ${money(lowest)}</span></div><div class="flight-table-scroll"><table class="flight-table"><thead><tr><th>Flight</th><th>Time</th><th>Stops</th><th>Displayed fare</th><th>Base</th><th>Taxes and fees</th><th>Other amount</th><th>API total</th><th>Evidence</th></tr></thead><tbody>${fareRows}</tbody></table></div><p class="fare-note">Displayed fare = base + taxes and fees. The airline response includes an additional amount without a label; it appears only in the API total.</p>${evidence}</div>` : '';
   const failureEvidence = task.failureEvidence ? `<div class="fare-evidence failure-evidence">${task.failureEvidence.screenshot ? `<a href="${evidenceUrl(run, task, task.failureEvidence.screenshot)}" target="_blank" rel="noopener">Failure screenshot ↗</a>` : ''}${task.failureEvidence.page ? `<a href="${evidenceUrl(run, task, task.failureEvidence.page)}" download>Saved failure page ↓</a>` : ''}${task.failureEvidence.bookingResponse ? `<a href="${evidenceUrl(run, task, task.failureEvidence.bookingResponse)}" download>Booking response ↓</a>` : ''}</div>` : '';
@@ -132,7 +136,14 @@ function renderRun(run) {
   $('#run-started').textContent = niceTime(run.startedAt);
   $('#retry-origin').hidden = !run.retryOf;
   $('#retry-origin').textContent = run.retryOf ?
-    `Single-search retry of saved run ${run.retryOf.runId}, search ${run.retryOf.taskId}. The original evidence is preserved.` : '';
+    (run.retryOf.taskIds?.length > 1 ?
+      `Batch retry of saved run ${run.retryOf.runId} for ${run.retryOf.taskIds.length} unfinished searches. The original evidence is preserved.` :
+      `Single-search retry of saved run ${run.retryOf.runId}, search ${run.retryOf.taskId || run.retryOf.taskIds?.[0]}. The original evidence is preserved.`) : '';
+  const retryableCount = retryableTasks(run, dateFor(0)).length;
+  const retryBatch = $('#retry-failed-button');
+  $('#retry-failed-panel').hidden = retryableCount === 0;
+  retryBatch.disabled = retryPending || active || runHasDenial(run) || retryableCount === 0;
+  retryBatch.textContent = `Retry ${retryableCount} unfinished search${retryableCount === 1 ? '' : 'es'}`;
   $('#run-resource').hidden = !run.resourceNote;
   $('#run-resource').textContent = run.resourceNote || '';
   const openLogs = new Set([...document.querySelectorAll('.event-toggle[open]')]
@@ -203,6 +214,33 @@ $('#cancel').addEventListener('click', async () => {
     renderRun(run);
   } catch (error) { $('#form-error').textContent = error.message; }
   finally { $('#cancel').disabled = false; }
+});
+$('#retry-failed-button').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  if (!currentRun || retryPending || retryableTasks(currentRun, dateFor(0)).length === 0 ||
+      ['running', 'stopping'].includes(currentRun.status) || runHasDenial(currentRun)) return;
+  retryPending = true;
+  const sourceRunId = currentRun.id;
+  button.disabled = true;
+  button.setAttribute('aria-busy', 'true');
+  button.textContent = 'Starting unfinished searches…';
+  $('#run-action-error').textContent = '';
+  try {
+    const { run } = await api(`/api/runs/${encodeURIComponent(sourceRunId)}/retry-failed`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    });
+    await refreshRecent(run.id);
+    renderRun(run);
+    connect(run.id);
+    $('#run-board').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (error) {
+    $('#run-action-error').textContent = error.message;
+    renderRun(currentRun);
+  } finally {
+    retryPending = false;
+    if (currentRun) renderRun(currentRun);
+    button.removeAttribute('aria-busy');
+  }
 });
 $('#task-list').addEventListener('click', async event => {
   const button = event.target.closest('button[data-retry-task]');

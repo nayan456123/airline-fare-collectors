@@ -180,6 +180,34 @@ export class JobManager extends EventEmitter {
     { runId, taskIds: tasks.map(task => task.id) });
   }
 
+  async recoverDeniedRun(runId, accessRestored) {
+    if (accessRestored !== true)
+      throw inputError('Confirm that Akasa access has been restored before resuming this saved run.');
+    const source = await this.get(runId);
+    if (!source) throw inputError('Saved run not found.');
+    if (['running', 'stopping'].includes(source.status))
+      throw Object.assign(new Error('Wait until the saved run finishes.'), { status: 409 });
+    const hasDenial = DENIAL.has(source.stopReason) || source.tasks.some(task => DENIAL.has(task.cause?.code));
+    if (!hasDenial)
+      throw Object.assign(new Error('This saved run has no recorded access denial to recover from.'), { status: 409 });
+    const tasks = source.tasks.filter(task =>
+      ['failed', 'partial', 'skipped', 'interrupted', 'blocked'].includes(task.status) &&
+      task.travelDate > istDate(0));
+    if (!tasks.length)
+      throw Object.assign(new Error('This run has no unfinished future searches to resume.'), { status: 409 });
+    if (tasks.length > MAX_TASKS)
+      throw Object.assign(new Error(`This recovery is limited to ${MAX_TASKS} searches.`), { status: 409 });
+    const routes = [...new Map(tasks.map(task => [
+      `${task.origin}-${task.destination}`, { origin: task.origin, destination: task.destination }
+    ])).values()];
+    const offsets = [...new Set(tasks.map(task => task.offset))].sort((a, b) => a - b);
+    return this.createPlan(await this.admitPlan({ routes, offsets,
+      browserMode: source.browserMode || 'headed', concurrency: Math.min(MAX_WORKERS, source.concurrency || 1, tasks.length),
+      tasks: tasks.map(task => ({ origin: task.origin, destination: task.destination,
+        travelDate: task.travelDate, offset: task.offset })) }),
+    { runId, taskIds: tasks.map(task => task.id), recovery: true });
+  }
+
   async deleteRun(id) {
     if (!/^[\w-]+$/.test(id)) throw inputError('Invalid run ID.');
     const run = await this.get(id);
@@ -338,7 +366,9 @@ export class JobManager extends EventEmitter {
         const dir = path.join(task.runRoot,
           `01-${task.origin}-${task.destination}-${task.travelDate}`);
         const result = JSON.parse(await fs.readFile(path.join(dir, 'result.json'), 'utf8'));
-        const report = result.status === 'ok' ? await verifySearch(dir) :
+        const report = result.status === 'ok' ? await verifySearch(dir, {
+          origin: task.origin, destination: task.destination, travelDate: task.travelDate
+        }) :
           { ok: false, errors: [result.cause?.code || `Search status ${result.status}`] };
         task.evidenceVerified = report.ok;
         task.evidenceErrors = report.errors;
