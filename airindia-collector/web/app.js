@@ -1,3 +1,5 @@
+import { DENIAL_CODES, retryableTasks, runHasDenial } from './retry-eligibility.js';
+
 const STAGES = [
   ['browser_ready', 'Browser'], ['homepage_loaded', 'Homepage'],
   ['airports_ready', 'Airports'], ['form_confirmed', 'Route + date'],
@@ -7,7 +9,7 @@ const STAGES = [
   ['complete', 'Complete']
 ];
 const OFFSETS = [1, 5, 9, 15, 30, 45];
-const DENIALS = new Set(['ACCESS_DENIED', 'CAPTCHA', 'RATE_LIMITED', 'SESSION_EXPIRED', 'SESSION_INVALID']);
+const DENIALS = DENIAL_CODES;
 const $ = selector => document.querySelector(selector);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g,
   char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
@@ -70,8 +72,9 @@ function evidenceUrl(run, task, file) {
 }
 
 function retryAction(run, task) {
-  if (!['failed', 'partial', 'skipped', 'interrupted'].includes(task.status) ||
-      DENIALS.has(run.stopReason) || DENIALS.has(task.cause?.code) ||
+  if (['running', 'stopping'].includes(run.status) ||
+      !['failed', 'partial', 'skipped', 'interrupted'].includes(task.status) ||
+      runHasDenial(run) || DENIALS.has(task.cause?.code) ||
       task.travelDate <= dateFor(0)) return '';
   const label = task.status === 'skipped' ? 'Run this search' : 'Retry this search';
   const route = `${task.origin} to ${task.destination} on ${niceDate(task.travelDate)}`;
@@ -84,7 +87,7 @@ function causeSummary(task) {
     CAPTCHA: task.cause?.detail?.includes('audio_unrecognized') ?
       'The audio check could not be understood. The batch stopped.' :
       'Air India requested human verification. The batch stopped.',
-    ACCESS_DENIED: 'Air India denied access to the booking results. The batch stopped.',
+    ACCESS_DENIED: 'Air India denied a search request. The batch stopped.',
     RATE_LIMITED: 'Air India limited requests. The batch stopped.',
     SESSION_EXPIRED: 'The booking session expired. The batch stopped.',
     AIRLINE_SCHEMA_UNVERIFIED: 'Flight response fields could not be verified.',
@@ -133,7 +136,14 @@ function renderRun(run) {
   $('#run-started').textContent = niceTime(run.startedAt);
   $('#retry-origin').hidden = !run.retryOf;
   $('#retry-origin').textContent = run.retryOf ?
-    `Single-search retry of saved run ${run.retryOf.runId}, search ${run.retryOf.taskId}. The original evidence is preserved.` : '';
+    (run.retryOf.taskIds?.length > 1 ?
+      `Batch retry of saved run ${run.retryOf.runId} for ${run.retryOf.taskIds.length} unfinished searches. The original evidence is preserved.` :
+      `Single-search retry of saved run ${run.retryOf.runId}, search ${run.retryOf.taskId || run.retryOf.taskIds?.[0]}. The original evidence is preserved.`) : '';
+  const retryableCount = retryableTasks(run, dateFor(0)).length;
+  const retryBatch = $('#retry-failed-button');
+  $('#retry-failed-panel').hidden = retryableCount === 0;
+  retryBatch.disabled = retryPending || active || runHasDenial(run) || retryableCount === 0;
+  retryBatch.textContent = `Retry ${retryableCount} unfinished search${retryableCount === 1 ? '' : 'es'}`;
   $('#run-resource').hidden = !run.resourceNote;
   $('#run-resource').textContent = run.resourceNote || '';
   const openLogs = new Set([...document.querySelectorAll('.event-toggle[open]')]
@@ -204,6 +214,33 @@ $('#cancel').addEventListener('click', async () => {
     renderRun(run);
   } catch (error) { $('#form-error').textContent = error.message; }
   finally { $('#cancel').disabled = false; }
+});
+$('#retry-failed-button').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  if (!currentRun || retryPending || retryableTasks(currentRun, dateFor(0)).length === 0 ||
+      ['running', 'stopping'].includes(currentRun.status) || runHasDenial(currentRun)) return;
+  retryPending = true;
+  const sourceRunId = currentRun.id;
+  button.disabled = true;
+  button.setAttribute('aria-busy', 'true');
+  button.textContent = 'Starting unfinished searches…';
+  $('#run-action-error').textContent = '';
+  try {
+    const { run } = await api(`/api/runs/${encodeURIComponent(sourceRunId)}/retry-failed`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    });
+    await refreshRecent(run.id);
+    renderRun(run);
+    connect(run.id);
+    $('#run-board').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (error) {
+    $('#run-action-error').textContent = error.message;
+    renderRun(currentRun);
+  } finally {
+    retryPending = false;
+    if (currentRun) renderRun(currentRun);
+    button.removeAttribute('aria-busy');
+  }
 });
 $('#task-list').addEventListener('click', async event => {
   const button = event.target.closest('button[data-retry-task]');

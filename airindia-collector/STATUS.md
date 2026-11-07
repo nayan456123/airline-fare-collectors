@@ -1,4 +1,45 @@
-# Live status — 27 October 2026 (IST)
+# Full-run access status — 28 October 2026 (IST)
+
+The 54-search dashboard run `web-runs/2026-10-28T12-35-18-441Z-256587`
+recorded 22 successful searches, then seven `SITE_ERROR` failures before it
+was cancelled; one search was interrupted and 24 were skipped. A subsequent
+single headless test of the reported BLR–CCU date captured HTTP 403 responses
+from Air India's fare and calendar endpoints and stopped as `ACCESS_DENIED`.
+The original generic errors did not expose a status, so this later observation
+does not prove that all seven earlier failures had the same cause. The collector
+now captures sanitized correlated response statuses when available and stops
+after repeated site errors. Restart recovery preserves a recorded denial and
+prevents stale fare or verification data from appearing on the denied task.
+A local 54-search scheduling fixture and the full
+browser-enabled suite passed; a successful live 54-search run remains unverified
+while the airline denies the tested requests.
+The dashboard can create a new batch for eligible unfinished searches while
+retaining the original dates and successful evidence; for the saved 54-search
+run it identifies 32 unfinished searches. Do not start the retry while access
+remains denied. The latest local suite passed 118 tests without failures or skips.
+
+# Earlier dashboard headless recovery — 28 October 2026 (IST)
+
+After the reported HTTP/2 homepage errors and a subsequent failed results
+batch, the revised dashboard completed **12/12 searches on their first
+attempt**, with **265 verified fares** and no failure or retry events. A
+separate two-search retest of the two previously failed dates also passed on
+the first attempt. The local browser-enabled suite passed 94/94 without skips.
+The results, earlier failures, configuration and limitations are recorded in
+the [headless recovery report](docs/headless-recovery-2026-10-28.md).
+
+# Earlier live headless status — 28 October 2026 (IST)
+
+The native-headless Air India CLI completed **12/12 searches on their first
+attempt**, saving **265 verified fares** across DEL–BOM and DEL–BLR and six
+future dates. A separate default dashboard search completed on its first attempt
+with 24 verified fares. All used the explicitly configured campaign entry,
+one worker and a direct connection. Chrome's actual `--headless` argument and
+the absence of a display were observed. This is a measured sample, not a
+guarantee of future availability or access. The report records configuration,
+evidence, earlier failures and limits: [28 October headless validation](docs/headless-validation-2026-10-28.md).
+
+# Historical live status — 27 October 2026 (IST)
 
 The final normal-dashboard matrix verified **12/12 queries in 12 first attempts, 275 fares**, with **zero UI Retry clicks**. The independently audited observed success rate is **100% for this twelve-query sample**. Configured local tests passed **75/75 without skips**, and targeted Chromium checks passed **25/25**.
 

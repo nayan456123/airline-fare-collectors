@@ -13,6 +13,8 @@ test('Chrome discovery accepts Windows, macOS, Linux, and an explicit path', () 
     exists: value => value === '/usr/bin/google-chrome' }), '/usr/bin/google-chrome');
   assert.equal(chromeExecutable({ platform: 'linux', env: { AIRINDIA_CHROME_PATH: '/custom/chrome' },
     exists: value => value === '/custom/chrome' }), '/custom/chrome');
+  assert.equal(chromeExecutable({ platform: 'linux', env: {}, chromiumExecutable: '/bundled/chrome',
+    exists: value => value === '/bundled/chrome' }), '/bundled/chrome');
   assert.throws(() => chromeExecutable({ platform: 'linux', env: {}, exists: () => false }),
     /not found/);
 });

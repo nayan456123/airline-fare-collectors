@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseArgs, matchesDateInput } from '../src/collect.mjs';
+import { parseArgs, matchesDateInput, marketsResponseFailure, waitForMarketsResponse,
+  classify } from '../src/collect.mjs';
 import { matchPageCards, parseSearchResponse, rowTimes } from '../src/parse.mjs';
 
 test('invalid route, date, and proxy input are rejected before a browser starts', () => {
@@ -15,6 +16,43 @@ test('Akasa weekday prefix and September abbreviation validate against the exact
   assert.equal(matchesDateInput('Wed, 11 Nov 2026', '2026-11-11'), true);
   assert.equal(matchesDateInput('Mon, 29 Sep 2026', '2026-09-28'), false);
   assert.equal(matchesDateInput('Mon, 28 Oct 2026', '2026-09-28'), false);
+});
+
+test('markets bootstrap accepts a denial response immediately instead of waiting for HTTP 200', async () => {
+  const response = { url: () => 'https://prod-bl.qp.akasaair.com/api/nsk/v2/resources/markets',
+    status: () => 401 };
+  const page = { async waitForResponse(predicate, options) {
+    assert.equal(options.timeout, 30000);
+    assert.equal(predicate(response), true);
+    return response;
+  } };
+  assert.equal(await waitForMarketsResponse(page), response);
+});
+
+test('markets bootstrap preserves denial codes and reports endpoint/status without guessing cause', () => {
+  const endpoint = '/api/nsk/v2/resources/markets';
+  const failure = status => marketsResponseFailure({ status: () => status });
+  assert.deepEqual(failure(401), { code: 'SESSION_EXPIRED',
+    detail: `Akasa returned HTTP 401 from ${endpoint}` });
+  assert.deepEqual(failure(403), { code: 'ACCESS_DENIED',
+    detail: `Akasa returned HTTP 403 from ${endpoint}` });
+  assert.deepEqual(failure(429), { code: 'RATE_LIMITED',
+    detail: `Akasa returned HTTP 429 from ${endpoint}` });
+  assert.deepEqual(failure(503), { code: 'MARKETS_UNAVAILABLE',
+    detail: `Akasa returned HTTP 503 from ${endpoint}` });
+  assert.equal(failure(200), null);
+});
+
+test('booking API denial classification retains endpoint/status before the generic error detail', () => {
+  const error = Object.assign(new Error('Airport suggestions unavailable'),
+    { code: 'AIRPORT_PICKER_UNAVAILABLE' });
+  const network = [{ host: 'prod-bl.qp.akasaair.com', path: '/api/nsk/v2/resources/markets',
+    status: 401 }];
+  assert.deepEqual(classify(error, network), { code: 'SESSION_EXPIRED',
+    detail: 'Akasa returned HTTP 401 from /api/nsk/v2/resources/markets' });
+  assert.deepEqual(classify(error, [...network, { ...network[0],
+    path: '/api/ibe/resources/master-data', status: 403 }]), { code: 'ACCESS_DENIED',
+    detail: 'Akasa returned HTTP 403 from /api/ibe/resources/master-data' });
 });
 
 test('nearby airport rows cannot be mistaken for exact-route fares', () => {

@@ -1,0 +1,506 @@
+{
+  "data": {
+    "currencyCode": "INR",
+    "searchParams": {
+      "origin": {
+        "stationCode": "DEL",
+        "fullName": "Delhi",
+        "locationDetails": {
+          "countryCode": "IN"
+        },
+        "currency": "INR",
+        "originCurrency": "INR"
+      },
+      "destination": {
+        "stationCode": "BOM",
+        "fullName": "Mumbai",
+        "locationDetails": {
+          "countryCode": "IN"
+        },
+        "currency": "INR"
+      },
+      "onWardDate": "2026-11-10T00:00:00.000Z"
+    },
+    "trips": [
+      {
+        "origin": "DEL",
+        "destination": "BOM",
+        "journeysAvailable": [
+          {
+            "designator": {
+              "destination": "BOM",
+              "origin": "DEL",
+              "arrival": "2026-11-10T07:55:00",
+              "departure": "2026-11-10T05:40:00",
+              "originFullName": "Delhi",
+              "destinationFullName": "Mumbai"
+            },
+            "journeyKey": "U0d_IDY3MX4gfn5ERUx_MTEvMTAvMjAyNiAwNTo0MH5CT01_MTEvMTAvMjAyNiAwNzo1NX5_",
+            "fares": {
+              "MH5DfiB_U0d_Q1NBVn41NTExfn4wfjY5OH5_WCEwOjY1OTA0OjEwMDQ6ODU0Ojc3NTQ6MjM2NDoxNTI0Ojg5NTozNzg-": {
+                "fareAvailabilityKey": "MH5DfiB_U0d_Q1NBVn41NTExfn4wfjY5OH5_WCEwOjY1OTA0OjEwMDQ6ODU0Ojc3NTQ6MjM2NDoxNTI0Ojg5NTozNzg-",
+                "fareCode": "CSAV",
+                "availableCount": 1,
+                "isSumOfSector": false,
+                "classOfService": "C"
+              },
+              "MH5DfiB_U0d_Q1NNRn41NTI3fn4wfjY0OX5_WCEwOjY5OTA0OjEwMDQ6ODU0Ojc3NTQ6MjM2NDoxNTI0Ojg5NTozOTg-": {
+                "fareAvailabilityKey": "MH5DfiB_U0d_Q1NNRn41NTI3fn4wfjY0OX5_WCEwOjY5OTA0OjEwMDQ6ODU0Ojc3NTQ6MjM2NDoxNTI0Ojg5NTozOTg-",
+                "fareCode": "CSMF",
+                "availableCount": 1,
+                "isSumOfSector": false,
+                "classOfService": "C"
+              },
+              "MH5DfiB_U0d_Q1NNWH41NTE3fn4wfjY4OX5_WCEwOjc4NDA0OjEwMDQ6ODU0Ojc3NTQ6MjM2NDoxNTI0Ojg5NTo0NDA-": {
+                "fareAvailabilityKey": "MH5DfiB_U0d_Q1NNWH41NTE3fn4wfjY4OX5_WCEwOjc4NDA0OjEwMDQ6ODU0Ojc3NTQ6MjM2NDoxNTI0Ojg5NTo0NDA-",
+                "fareCode": "CSMX",
+                "availableCount": 1,
+                "isSumOfSector": false,
+                "classOfService": "C"
+              },
+              "MH5DfiB_U0d_Q01YQ341NTE3fn4wfjcxNX5_WCEwOjg2NTg0OjEwMDQ6ODU0Ojc3NTQ6MjM2NDoxNTI0Ojg5NTo0ODA-": {
+                "fareAvailabilityKey": "MH5DfiB_U0d_Q01YQ341NTE3fn4wfjcxNX5_WCEwOjg2NTg0OjEwMDQ6ODU0Ojc3NTQ6MjM2NDoxNTI0Ojg5NTo0ODA-",
+                "fareCode": "CMXC",
+                "availableCount": 1,
+                "isSumOfSector": false,
+                "classOfService": "C"
+              }
+            },
+            "stops": 0,
+            "segments": [
+              {
+                "identifier": {
+                  "identifier": "671",
+                  "carrierCode": "SG",
+                  "opSuffix": null
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "faresAvailable": {
+      "MH5DfiB_U0d_Q1NBVn41NTExfn4wfjY5OH5_WCEwOjY1OTA0OjEwMDQ6ODU0Ojc3NTQ6MjM2NDoxNTI0Ojg5NTozNzg-": {
+        "passengerFares": [
+          {
+            "fareDiscountCode": null,
+            "passengerDiscountCode": null,
+            "passengerType": "ADT",
+            "fareAmount": 8405,
+            "revenueFare": 6590,
+            "publishedFare": 6590,
+            "loyaltyPoints": 0,
+            "discountedFare": 6590,
+            "serviceCharges": [
+              {
+                "amount": 6590,
+                "code": null,
+                "detail": null,
+                "type": 0,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 6590,
+                "ticketCode": null
+              },
+              {
+                "amount": 100,
+                "code": "RCS",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 100,
+                "ticketCode": "RCS"
+              },
+              {
+                "amount": 85,
+                "code": "TRF",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 85,
+                "ticketCode": "TRF"
+              },
+              {
+                "amount": 775,
+                "code": "YQ",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 775,
+                "ticketCode": "YQ"
+              },
+              {
+                "amount": 236,
+                "code": "ASF",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 236,
+                "ticketCode": "ASF"
+              },
+              {
+                "amount": 152,
+                "code": "UDF",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 152,
+                "ticketCode": "UDF"
+              },
+              {
+                "amount": 89,
+                "code": "AAT",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 89,
+                "ticketCode": "AAT"
+              },
+              {
+                "amount": 378,
+                "code": null,
+                "detail": "TaxSum",
+                "type": 5,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 378,
+                "ticketCode": null
+              }
+            ],
+            "multiplier": 1
+          }
+        ]
+      },
+      "MH5DfiB_U0d_Q1NNRn41NTI3fn4wfjY0OX5_WCEwOjY5OTA0OjEwMDQ6ODU0Ojc3NTQ6MjM2NDoxNTI0Ojg5NTozOTg-": {
+        "passengerFares": [
+          {
+            "fareDiscountCode": null,
+            "passengerDiscountCode": null,
+            "passengerType": "ADT",
+            "fareAmount": 8825,
+            "revenueFare": 6990,
+            "publishedFare": 6990,
+            "loyaltyPoints": 0,
+            "discountedFare": 6990,
+            "serviceCharges": [
+              {
+                "amount": 6990,
+                "code": null,
+                "detail": null,
+                "type": 0,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 6990,
+                "ticketCode": null
+              },
+              {
+                "amount": 100,
+                "code": "RCS",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 100,
+                "ticketCode": "RCS"
+              },
+              {
+                "amount": 85,
+                "code": "TRF",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 85,
+                "ticketCode": "TRF"
+              },
+              {
+                "amount": 775,
+                "code": "YQ",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 775,
+                "ticketCode": "YQ"
+              },
+              {
+                "amount": 236,
+                "code": "ASF",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 236,
+                "ticketCode": "ASF"
+              },
+              {
+                "amount": 152,
+                "code": "UDF",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 152,
+                "ticketCode": "UDF"
+              },
+              {
+                "amount": 89,
+                "code": "AAT",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 89,
+                "ticketCode": "AAT"
+              },
+              {
+                "amount": 398,
+                "code": null,
+                "detail": "TaxSum",
+                "type": 5,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 398,
+                "ticketCode": null
+              }
+            ],
+            "multiplier": 1
+          }
+        ]
+      },
+      "MH5DfiB_U0d_Q1NNWH41NTE3fn4wfjY4OX5_WCEwOjc4NDA0OjEwMDQ6ODU0Ojc3NTQ6MjM2NDoxNTI0Ojg5NTo0NDA-": {
+        "passengerFares": [
+          {
+            "fareDiscountCode": null,
+            "passengerDiscountCode": null,
+            "passengerType": "ADT",
+            "fareAmount": 9717,
+            "revenueFare": 7840,
+            "publishedFare": 7840,
+            "loyaltyPoints": 0,
+            "discountedFare": 7840,
+            "serviceCharges": [
+              {
+                "amount": 7840,
+                "code": null,
+                "detail": null,
+                "type": 0,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 7840,
+                "ticketCode": null
+              },
+              {
+                "amount": 100,
+                "code": "RCS",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 100,
+                "ticketCode": "RCS"
+              },
+              {
+                "amount": 85,
+                "code": "TRF",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 85,
+                "ticketCode": "TRF"
+              },
+              {
+                "amount": 775,
+                "code": "YQ",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 775,
+                "ticketCode": "YQ"
+              },
+              {
+                "amount": 236,
+                "code": "ASF",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 236,
+                "ticketCode": "ASF"
+              },
+              {
+                "amount": 152,
+                "code": "UDF",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 152,
+                "ticketCode": "UDF"
+              },
+              {
+                "amount": 89,
+                "code": "AAT",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 89,
+                "ticketCode": "AAT"
+              },
+              {
+                "amount": 440,
+                "code": null,
+                "detail": "TaxSum",
+                "type": 5,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 440,
+                "ticketCode": null
+              }
+            ],
+            "multiplier": 1
+          }
+        ]
+      },
+      "MH5DfiB_U0d_Q01YQ341NTE3fn4wfjcxNX5_WCEwOjg2NTg0OjEwMDQ6ODU0Ojc3NTQ6MjM2NDoxNTI0Ojg5NTo0ODA-": {
+        "passengerFares": [
+          {
+            "fareDiscountCode": null,
+            "passengerDiscountCode": null,
+            "passengerType": "ADT",
+            "fareAmount": 10575,
+            "revenueFare": 8658,
+            "publishedFare": 8658,
+            "loyaltyPoints": 0,
+            "discountedFare": 8658,
+            "serviceCharges": [
+              {
+                "amount": 8658,
+                "code": null,
+                "detail": null,
+                "type": 0,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 8658,
+                "ticketCode": null
+              },
+              {
+                "amount": 100,
+                "code": "RCS",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 100,
+                "ticketCode": "RCS"
+              },
+              {
+                "amount": 85,
+                "code": "TRF",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 85,
+                "ticketCode": "TRF"
+              },
+              {
+                "amount": 775,
+                "code": "YQ",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 775,
+                "ticketCode": "YQ"
+              },
+              {
+                "amount": 236,
+                "code": "ASF",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 236,
+                "ticketCode": "ASF"
+              },
+              {
+                "amount": 152,
+                "code": "UDF",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 152,
+                "ticketCode": "UDF"
+              },
+              {
+                "amount": 89,
+                "code": "AAT",
+                "detail": "DEL-BOM",
+                "type": 4,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 89,
+                "ticketCode": "AAT"
+              },
+              {
+                "amount": 480,
+                "code": null,
+                "detail": "TaxSum",
+                "type": 5,
+                "collectType": 0,
+                "currencyCode": "INR",
+                "foreignCurrencyCode": "INR",
+                "foreignAmount": 480,
+                "ticketCode": null
+              }
+            ],
+            "multiplier": 1
+          }
+        ]
+      }
+    }
+  }
+}

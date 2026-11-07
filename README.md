@@ -1,7 +1,7 @@
 # Airline Fare Collectors
 
-Four independent, local browser collectors for current fare searches on the
-public booking sites of IndiGo, Akasa Air, Air India, and Air India Express.
+Five independent, local browser collectors for current fare searches on the
+public booking sites of IndiGo, Akasa Air, Air India, Air India Express, and SpiceJet.
 They use rendered airline pages and save per-search route, travel date,
 collection time, flight and fare breakdown, page/network evidence, and failure
 cause. A failed or blocked search stays a failure; no fare is invented and an
@@ -21,6 +21,7 @@ installation does not guarantee that an airline will return a fare.
 | Akasa Air | http://127.0.0.1:8788/ | [akasa-collector/README.md](akasa-collector/README.md) |
 | Air India | http://127.0.0.1:8789/ | [airindia-collector/README.md](airindia-collector/README.md) |
 | Air India Express | http://127.0.0.1:8791/ | [airindia-express-collector/README.md](airindia-express-collector/README.md) |
+| SpiceJet | http://127.0.0.1:8790/ | [spicejet-collector/README.md](spicejet-collector/README.md) |
 
 ## Troubleshooting
 

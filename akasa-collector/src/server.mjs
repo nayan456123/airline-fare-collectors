@@ -72,6 +72,12 @@ async function route(req, res) {
     const run = await manager.retryFailed(retryFailed[1]);
     return send(res, 201, { run });
   }
+  const recover = /^\/api\/runs\/([\w-]+)\/recover-denied$/.exec(url.pathname);
+  if (recover && req.method === 'POST') {
+    const body = await bodyJson(req);
+    const run = await manager.recoverDeniedRun(recover[1], body.accessRestored);
+    return send(res, 201, { run });
+  }
   const match = /^\/api\/runs\/([\w-]+)(?:\/(events|cancel|evidence)(?:\/([0-9]{3})\/([\w.-]+))?)?$/.exec(url.pathname);
   if (match) {
     const [, id, action, taskId, filename] = match;

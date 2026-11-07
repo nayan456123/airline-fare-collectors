@@ -37,7 +37,7 @@ function priceFare(availability, currency) {
       ({ type, code, detail, amount, currencyCode })) };
 }
 
-export function parseSearchResponse(body, query) {
+export function parseSearchResponse(body, query, { cards } = {}) {
   let payload;
   try { payload = typeof body === 'string' ? JSON.parse(body) : body; }
   catch { throw fail('AIX response was not valid JSON.'); }
@@ -68,13 +68,17 @@ export function parseSearchResponse(body, query) {
       const price = priceFare(availability, data.currencyCode);
       return { price, fareAvailabilityKey: reference.fareAvailabilityKey,
         brand: [...new Set(availability.fares.map(f => f.productClass))].join(' + ') };
-    }).sort((a, b) => a.price.displayedTotal - b.price.displayedTotal);
-    if (!options.length) throw fail('AIX journey has no verified starting fare.');
+    });
+    const matchingCards = (cards || []).filter(card => card.journeyKey === journey.journeyKey &&
+      card.origin === query.origin && card.destination === query.destination);
+    if (matchingCards.length !== 1) throw fail('AIX journey has no unique exact-route rendered row.');
+    const displayed = options.filter(option => close(option.price.displayedTotal, matchingCards[0].displayedTotal));
+    if (displayed.length !== 1) throw fail('AIX rendered fare does not uniquely match an airline fare option.');
     return { origin: query.origin, destination: query.destination, travelDate: query.travelDate,
       flight: flights.join(' + '), flights, departureDateTime: designator.departure,
       arrivalDateTime: designator.arrival, departureTime: designator.departure.slice(11, 16),
       arrivalTime: designator.arrival.slice(11, 16), stops: journey.stops,
-      journeyKey: journey.journeyKey, ...options[0] };
+      journeyKey: journey.journeyKey, ...displayed[0] };
   });
   return { fares, expectedJourneys: fares.length, schema: 'aix-fsa-v4-navitaire' };
 }
@@ -119,6 +123,8 @@ export function matchFaresToCards(fares, cards, query) {
   const exact = cards.filter(card => card.origin === query.origin && card.destination === query.destination);
   if (!fares.length || fares.length !== exact.length)
     throw fail(`AIX page/response coverage differs: ${exact.length} exact-route rows, ${fares.length} journeys.`);
+  if (new Set(fares.map(fare => fare.journeyKey)).size !== fares.length)
+    throw fail('AIX response contains duplicate journey identities.');
   for (const fare of fares) {
     const matches = exact.filter(card => card.journeyKey === fare.journeyKey);
     if (matches.length !== 1) throw fail(`AIX page row missing or ambiguous for ${fare.flight}.`);

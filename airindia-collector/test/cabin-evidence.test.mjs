@@ -100,11 +100,11 @@ test('version 2 saved AI 2409 evidence verifies its cabin and rejects a tampered
   }
   const result = { status: 'ok', fareEvidenceVersion: 2, query,
     fares: parseSearchResponse(response, query), evidence };
-  const valid = await verifySearch(directory, result);
+  const valid = await verifySearch(directory, result, { allowLegacy: true });
   assert.equal(valid.ok, true, valid.errors.join('; '));
 
   result.fares[0].cabin = 'economy';
-  const tampered = await verifySearch(directory, result);
+  const tampered = await verifySearch(directory, result, { allowLegacy: true });
   assert.equal(tampered.ok, false);
   assert.ok(tampered.errors.some(error => /Saved fare differs/.test(error)));
 });
@@ -122,11 +122,11 @@ test('legacy saved AI 2409 fares may omit only cabin while keeping every core fi
   }
   const result = { status: 'ok', query, fares: parseSearchResponse(response, query), evidence };
   delete result.fares[0].cabin;
-  const legacy = await verifySearch(directory, result);
+  const legacy = await verifySearch(directory, result, { allowLegacy: true });
   assert.equal(legacy.ok, true, legacy.errors.join('; '));
 
   result.fares[0].price.displayedTotal = 34433;
-  const tamperedCore = await verifySearch(directory, result);
+  const tamperedCore = await verifySearch(directory, result, { allowLegacy: true });
   assert.equal(tamperedCore.ok, false);
   assert.ok(tamperedCore.errors.some(error => /Saved fare differs/.test(error)));
 });
@@ -135,9 +135,10 @@ test('dashboard shows the verified cabin beside the flight number', {
   skip: !executablePath && 'Set AIRINDIA_TEST_CHROME_PATH to run the optional Chromium UI test'
 }, async () => {
   const webRoot = new URL('../web/', import.meta.url);
-  const [html, appJs] = await Promise.all([
+  const [html, appJs, retryEligibilityJs] = await Promise.all([
     fs.readFile(new URL('index.html', webRoot), 'utf8'),
-    fs.readFile(new URL('app.js', webRoot), 'utf8')
+    fs.readFile(new URL('app.js', webRoot), 'utf8'),
+    fs.readFile(new URL('retry-eligibility.js', webRoot), 'utf8')
   ]);
   const run = { id: 'saved-ai2409', status: 'complete', startedAt: '2026-10-26T17:00:00.000Z',
     stopReason: null, retryOf: null, routes: ['DEL-BLR'], browserMode: 'headless', tasks: [{
@@ -158,6 +159,7 @@ test('dashboard shows the verified cabin beside the flight number', {
       if (url.hostname !== 'airindia.test') return route.abort();
       if (url.pathname === '/') return route.fulfill({ contentType: 'text/html', body: html });
       if (url.pathname === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: appJs });
+      if (url.pathname === '/retry-eligibility.js') return route.fulfill({ contentType: 'text/javascript', body: retryEligibilityJs });
       if (url.pathname === '/styles.css') return route.fulfill({ contentType: 'text/css', body: '' });
       if (url.pathname === '/api/config') return route.fulfill({ json: { audioHelperAvailable: true } });
       if (url.pathname === '/api/runs') return route.fulfill({ json: { runs: [run] } });

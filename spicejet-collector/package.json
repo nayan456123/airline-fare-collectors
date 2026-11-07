@@ -1,0 +1,19 @@
+{
+  "name": "spicejet-direct-fares",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "collect": "node src/collect.mjs",
+    "web": "node src/server.mjs",
+    "verify": "node src/verify.mjs",
+    "test": "node --test",
+    "verify:batch": "node scripts/verify-batch.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}

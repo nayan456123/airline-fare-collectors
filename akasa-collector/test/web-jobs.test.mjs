@@ -75,6 +75,38 @@ test('a stopped server records interrupted work on disk', async () => {
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
+test('dashboard finish rejects a successful result for a different task query', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'akasa-result-query-'));
+  const runRoot = path.join(root, 'worker-run');
+  const task = { id: '001', origin: 'DEL', destination: 'BOM', travelDate: istDate(5),
+    status: 'running', stage: 'results_rendered', worker: 1, fares: [], events: [],
+    runRoot, finishedAt: null, evidenceVerified: false, evidenceErrors: [] };
+  const job = { id: 'query-binding', root: path.join(root, 'saved-job'), status: 'partial',
+    tasks: [task], routes: [{ origin: 'DEL', destination: 'BOM' }], offsets: [5],
+    concurrency: 1, browserMode: 'headless', startedAt: new Date().toISOString() };
+  const resultDir = path.join(runRoot, `01-${task.origin}-${task.destination}-${task.travelDate}`);
+  const manager = new JobManager({ root, packageRoot: root });
+  try {
+    await fs.mkdir(resultDir, { recursive: true });
+    await fs.mkdir(job.root, { recursive: true });
+    await fs.writeFile(path.join(resultDir, 'result.json'), JSON.stringify({
+      status: 'ok', query: { origin: 'DEL', destination: 'BLR', travelDate: task.travelDate },
+      expectedJourneys: 1, fares: [{ flight: 'QP1234' }]
+    }));
+
+    await manager.finish(job, task, 0, null, null);
+
+    assert.equal(task.status, 'failed');
+    assert.equal(task.evidenceVerified, false);
+    assert.deepEqual(task.fares, []);
+    assert.equal(task.cause.code, 'EVIDENCE_UNVERIFIED');
+    assert.match(task.cause.detail, /query does not match/);
+  } finally {
+    await manager.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('CAPTCHA stops queued searches before another airline request starts', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'akasa-denial-'));
   let child;
@@ -124,5 +156,53 @@ test('batch retry selects only eligible failed dates and deletion removes run ev
     assert.deepEqual(await manager.deleteRun(id), { id, deleted: true });
     await assert.rejects(fs.access(path.join(root, id)));
     assert.equal(await manager.get(id), null);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('explicit denied-run recovery resumes only unfinished future tasks and preserves the source', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'akasa-denied-recovery-'));
+  const id = 'historical-denied-run';
+  const manager = new JobManager({ root, packageRoot: root });
+  const tasks = Array.from({ length: 54 }, (_, index) => ({
+    id: String(index + 1).padStart(3, '0'), origin: 'DEL', destination: index % 2 ? 'BLR' : 'BOM',
+    travelDate: istDate(1 + (index % 6)), offset: [1, 5, 9, 15, 30, 45][index % 6],
+    status: index < 25 ? 'ok' : index === 25 ? 'blocked' : 'skipped',
+    cause: index === 25 ? { code: 'SESSION_EXPIRED' } : index > 25 ? { code: 'BATCH_STOPPED' } : null,
+    fares: index < 25 ? [{ flight: `QP${index}` }] : []
+  }));
+  const source = { id, status: 'partial', stopReason: 'SESSION_EXPIRED', browserMode: 'headless',
+    concurrency: 2, routes: [{ origin: 'DEL', destination: 'BOM' }], offsets: [1, 5, 9, 15, 30, 45], tasks };
+  try {
+    await fs.mkdir(path.join(root, id));
+    const sourceBytes = JSON.stringify(source);
+    await fs.writeFile(path.join(root, id, 'jobs.json'), sourceBytes);
+    manager.createPlan = async (plan, retryOf) => ({ plan, retryOf });
+    await assert.rejects(manager.recoverDeniedRun(id, false), /Confirm that Akasa access has been restored/);
+    const recovered = await manager.recoverDeniedRun(id, true);
+    assert.equal(recovered.plan.tasks.length, 29);
+    assert.deepEqual(recovered.retryOf, { runId: id, taskIds: tasks.slice(25).map(task => task.id), recovery: true });
+    assert.deepEqual(recovered.plan.tasks.map(task => task.travelDate), tasks.slice(25).map(task => task.travelDate));
+    assert.equal(recovered.plan.browserMode, 'headless');
+    assert.equal(await fs.readFile(path.join(root, id, 'jobs.json'), 'utf8'), sourceBytes);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('denied-run recovery requires a recorded denial and stops including passed travel dates', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'akasa-denied-recovery-guard-'));
+  const manager = new JobManager({ root, packageRoot: root });
+  try {
+    const id = 'no-denial';
+    await fs.mkdir(path.join(root, id));
+    await fs.writeFile(path.join(root, id, 'jobs.json'), JSON.stringify({ id, status: 'partial', tasks: [
+      { id: '001', status: 'skipped', origin: 'DEL', destination: 'BOM', travelDate: istDate(1), offset: 1 }
+    ] }));
+    await assert.rejects(manager.recoverDeniedRun(id, true), /no recorded access denial/);
+    const expiredId = 'past-only';
+    await fs.mkdir(path.join(root, expiredId));
+    await fs.writeFile(path.join(root, expiredId, 'jobs.json'), JSON.stringify({ id: expiredId, status: 'partial',
+      stopReason: 'SESSION_EXPIRED', tasks: [
+        { id: '001', status: 'blocked', cause: { code: 'SESSION_EXPIRED' }, origin: 'DEL', destination: 'BOM', travelDate: istDate(0), offset: 1 }
+      ] }));
+    await assert.rejects(manager.recoverDeniedRun(expiredId, true), /no unfinished future searches/);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

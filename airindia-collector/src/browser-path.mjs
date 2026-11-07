@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 export function chromeExecutable({ platform = process.platform, env = process.env,
-  exists = fs.existsSync } = {}) {
+  exists = fs.existsSync, chromiumExecutable = null } = {}) {
   const override = env.AIRINDIA_CHROME_PATH;
   if (override) {
     if (!exists(override)) throw new Error(`AIRINDIA_CHROME_PATH does not exist: ${override}`);
@@ -18,7 +18,7 @@ export function chromeExecutable({ platform = process.platform, env = process.en
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     path.join(os.homedir(), 'Applications/Google Chrome.app/Contents/MacOS/Google Chrome')
   ] : ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/opt/google/chrome/chrome'];
-  const found = candidates.filter(Boolean).find(exists);
+  const found = [...candidates, chromiumExecutable].filter(Boolean).find(exists);
   if (!found) throw new Error('Google Chrome was not found. Install it or set AIRINDIA_CHROME_PATH.');
   return found;
 }

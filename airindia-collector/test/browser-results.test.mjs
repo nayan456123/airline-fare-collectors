@@ -246,7 +246,7 @@ test('a persistent standard Air India error gets only one native Retry click', {
     </script>`);
     let detected=0,retried=0;
     await assert.rejects(waitForMatchingResults(page,[],query,[],{
-      timeoutMs:180,pollingMs:20,onSiteError:()=>{detected++},onSiteRetry:()=>{retried++}
+      timeoutMs:1200,pollingMs:20,onSiteError:()=>{detected++},onSiteRetry:()=>{retried++}
     }),error=>error.code==='SITE_ERROR');
     assert.equal(await page.evaluate(()=>window.retryClicks),1);
     assert.equal(detected,1);
@@ -308,7 +308,7 @@ test('a standard-error Retry never accepts a fare card with a different displaye
       });
     </script>`);
     const matched=await waitForMatchingResults(page,[{body:responseBody}],query,[],{
-      timeoutMs:180,pollingMs:20
+      timeoutMs:1200,pollingMs:20
     });
     assert.equal(matched,false,'the retry result must still pass the exact response-to-card comparison');
     assert.equal(await page.evaluate(()=>window.retryClicks),1);

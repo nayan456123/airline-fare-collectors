@@ -119,6 +119,8 @@ node src/verify.mjs web-runs/RUN_ID
 
 `npm test` checks routes, dates, worker scheduling, evidence matching, and retry behavior. The verifier checks saved file integrity and fare evidence without sending a new airline search. Replace `RUN_ID` with a saved directory name. A failed search or unverified evidence produces a nonzero exit code.
 
+The verifier requires recorded airline-response provenance by default. To inspect older saved runs that predate that evidence, use `node src/verify.mjs --allow-legacy web-runs/RUN_ID`. The report marks those searches with `provenanceVerified: false`; legacy verification cannot establish the missing response provenance.
+
 ## Using the desk
 
 The generic entry is `https://www.airindia.com/`. To use the exact entry verified
@@ -131,14 +133,20 @@ AIRINDIA_ENTRY_URL='https://www.airindia.com/?ai_pc=MYFLIGHTAIR' npm run web
 The CLI reads the same setting; `--entry-url` overrides it for one invocation.
 Dashboard jobs save their entry URL and retain it when retried. The campaign
 setting is explicit because its effect on available fares has not been isolated.
-The successful observed transport is visible Chrome through external Chrome/CDP;
-the CLI example below selects it, and the dashboard uses it for Visible Chrome.
+On this Linux machine, the default headless Chrome mode uses a dedicated Chrome
+process with native `--headless` and a compatible user agent for the installed
+Chrome version. Direct headless dashboard searches disable HTTP/2 and use a
+separate collector-owned profile for each search; old persistent profiles are
+not deleted or copied. Generated dashboard profiles remain under
+`.session/dashboard-headless/` and can use significant disk space; they can be
+removed when no dashboard searches are running. The dashboard also offers visible Chrome. The 28 October
+headless sample is described in [the validation report](docs/headless-validation-2026-10-28.md).
 
 1. Enter one route per line, such as `DEL-BOM`, or use the route shortcuts. The city-pair shortcuts are research presets; the collector still checks the selected airline’s exact airport availability.
-2. Select one or more of the six offered future travel dates and choose visible or headless Chrome. Visible Chrome uses the dedicated persistent profile and is the tested mode.
+2. Select one or more of the six offered future travel dates and choose headless or visible Chrome. Headless is the default.
 3. Start the run. Each route/date has its own progress bar, stage log, status, and saved evidence. The desk supports up to 54 searches per batch, spaces starts by at least 20 seconds, and stops queued requests after access denial.
 4. For a completed search, inspect every captured flight, displayed total, base, taxes and fees, separate unitemized amount, airline response total, page screenshot, saved page, and saved airline response. A failed search has no fare; its card shows the cause and any available failure page.
-5. Use **Retry this search** on an eligible failed card to retry only that original future route/date. The prior run and evidence stay saved.
+5. Use **Retry this search** on an eligible failed card, or **Retry unfinished searches** to retry eligible failed, skipped, or interrupted searches together. The original future travel dates are retained; each retry creates a new saved run, and the prior results and evidence stay saved. Wait until Air India access is available before retrying. Runs with a recorded access denial or challenge cannot be retried.
 
 For a direct command on Ubuntu:
 
@@ -146,7 +154,7 @@ For a direct command on Ubuntu:
 npm run collect -- \
   --search "DEL:BOM:$(date -d '+5 days' +%F)" \
   --entry-url 'https://www.airindia.com/?ai_pc=MYFLIGHTAIR' \
-  --headed --external-chrome --retries 0
+  --headless
 ```
 
 This Linux date expression is only an example; the dashboard handles travel dates on every supported OS. CLI runs are stored under `runs/`; dashboard runs are under `web-runs/`. Both directories are excluded from Git.
@@ -159,7 +167,8 @@ Console jobs share browser admission with the sibling collectors. Below 8 GiB RA
 
 | Need | Setting or action |
 | --- | --- |
-| Chrome installed elsewhere | Set `AIRINDIA_CHROME_PATH` to its executable. The collector also checks standard Windows, macOS, and Linux locations. |
+| Chrome installed elsewhere | Set `AIRINDIA_CHROME_PATH` to its executable. The collector also checks standard Windows, macOS, and Linux locations, then the installed Playwright Chromium binary. |
+| CLI Chrome HTTP/2 failure | Add `--disable-http2` for a Chrome CLI search. The direct headless dashboard selects this option automatically. |
 | Optional helper installed elsewhere | Set `AIRINDIA_SOLVER_PYTHON` to that environment's Python executable before starting the server. |
 | HTTP, HTTPS, or SOCKS5 proxy | Set `AIRINDIA_PROXY_SERVER` before starting the desk. CLI also accepts `--proxy`, `--proxy-user`, and `--proxy-password`. Proxy searches use Playwright’s browser path. |
 | Port 8789 is occupied | Set `AIRINDIA_PORT` to another local port before starting. |
